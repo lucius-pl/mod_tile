@@ -101,6 +101,7 @@ typedef struct expire_thread_stats {
 } expire_thread_stats;
 
 static expire_request *expire_queue = NULL;
+static expire_request *expire_queue_tail = NULL;
 
 static pthread_mutex_t expire_queue_lock;
 static pthread_cond_t expire_queue_item_avail;
@@ -152,7 +153,12 @@ void* expire_worker(void *arg)
             pthread_mutex_unlock(&expire_queue_lock);
             return stats;
         }
-        expire_queue = curr_request->next;
+        if (expire_queue == expire_queue_tail) {
+            expire_queue = expire_queue_tail = NULL;
+        }
+        else {
+            expire_queue = curr_request->next;
+        }
         pthread_mutex_unlock(&expire_queue_lock);
 
         s = config->store->tile_stat(config->store, curr_request->mapname, "", curr_request->x, curr_request->y, curr_request->z);
@@ -221,15 +227,21 @@ void spawn_expire_threads(int num_expire_threads, expire_config *config)
 
 void add_expire_request(const char *xmlname, int x, int y, int z, int terminate)
 {
-    pthread_mutex_lock(&expire_queue_lock);
     expire_request *r = (expire_request*) calloc(1, sizeof(expire_request));
     r->mapname = xmlname;
     r->x = x;
     r->y = y;
     r->z = z;
-    r->next = expire_queue;
     r->terminate = terminate;
-    expire_queue = r;
+    r->next = NULL;
+
+    pthread_mutex_lock(&expire_queue_lock);
+    if (expire_queue_tail) {
+        expire_queue_tail->next = r;
+    } else {
+        expire_queue = r;
+    }
+    expire_queue_tail = r;
     pthread_cond_broadcast(&expire_queue_item_avail);
     pthread_mutex_unlock(&expire_queue_lock);
 }
@@ -241,6 +253,7 @@ void wait_expire_threads(int num_expire_threads, expire_thread_stats *totals)
     totals->num_touch = 0;
     totals->num_unlink = 0;
 
+    printf("Waiting for expire threads to finish\n");
     for (int i = 0; i < num_expire_threads; i++) {
         void *thread_stats_ptr;
         pthread_join(expire_threads[i], &thread_stats_ptr);
