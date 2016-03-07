@@ -250,6 +250,7 @@ void wait_expire_threads(int num_expire_threads, expire_thread_stats *totals)
         totals->num_render += thread_stats->num_render;
         totals->num_touch += thread_stats->num_touch;
         totals->num_unlink += thread_stats->num_unlink;
+        free(thread_stats);
     }
 }
 
