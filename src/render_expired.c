@@ -293,6 +293,11 @@ int main(int argc, char **argv)
         mt >>= 1;
     }
 
+    config.deleteFrom = -1;
+    config.touchFrom = -1;
+    config.doRender = 0;
+    config.store = NULL;
+
     while (1)
     {
         int option_index = 0;
