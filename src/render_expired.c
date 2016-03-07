@@ -144,17 +144,15 @@ void* expire_worker(void *arg)
 
     while (1) {
         pthread_mutex_lock(&expire_queue_lock);
-        while (curr_request == NULL) {
+        while (expire_queue == NULL) {
             pthread_cond_wait(&expire_queue_item_avail, &expire_queue_lock);
-            curr_request = expire_queue;
-            if (curr_request != NULL) {
-                if (curr_request->terminate) {
-                    pthread_mutex_unlock(&expire_queue_lock);
-                    return stats;
-                }
-                expire_queue = curr_request->next;
-            }
         }
+        curr_request = expire_queue;
+        if (curr_request->terminate) {
+            pthread_mutex_unlock(&expire_queue_lock);
+            return stats;
+        }
+        expire_queue = curr_request->next;
         pthread_mutex_unlock(&expire_queue_lock);
 
         s = config->store->tile_stat(config->store, curr_request->mapname, "", curr_request->x, curr_request->y, curr_request->z);
