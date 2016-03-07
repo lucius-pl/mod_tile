@@ -149,6 +149,7 @@ void* expire_worker(void *arg)
             curr_request = expire_queue;
             if (curr_request != NULL) {
                 if (curr_request->terminate) {
+                    pthread_mutex_unlock(&expire_queue_lock);
                     return stats;
                 }
                 expire_queue = curr_request->next;
@@ -231,7 +232,7 @@ void add_expire_request(const char *xmlname, int x, int y, int z, int terminate)
     r->next = expire_queue;
     r->terminate = terminate;
     expire_queue = r;
-    pthread_cond_signal(&expire_queue_item_avail);
+    pthread_cond_broadcast(&expire_queue_item_avail);
     pthread_mutex_unlock(&expire_queue_lock);
 }
 
@@ -426,13 +427,13 @@ int main(int argc, char **argv)
         config.doRender = 1;
     }
 
-    spawn_expire_threads(numExpireThreads, &config);
-
     config.store = init_storage_backend(tile_dir);
     if (config.store == NULL) {
         fprintf(stderr, "failed to initialise storage backend %s\n", tile_dir);
         return 1;
     }
+
+    spawn_expire_threads(numExpireThreads, &config);
 
     while (!feof(stdin)) {
         struct stat_info s;
@@ -450,12 +451,10 @@ int main(int argc, char **argv)
             continue;
         }
 
-        while (z > maxZoom)
-        {
+        while (z > maxZoom) {
             x>>=1; y>>=1; z--;
         }
-        while (z < maxZoom)
-        {
+        while (z < maxZoom) {
             x<<=1; y<<=1; z++;
         }
         //printf("loop: x=%d y=%d z=%d up to z=%d\n", x, y, z, minZoom);
@@ -484,7 +483,7 @@ int main(int argc, char **argv)
             // unnecessary later stat'ing).
             SET_TILE_REQUESTED(z - excess_zoomlevels,x>>excess_zoomlevels,y>>excess_zoomlevels);
 
-            // commented out - seems to cause problems in MT environment, 
+            // commented out - seems to cause problems in MT environment,
             // trying to write to already-closed file
             //check_load();
 
