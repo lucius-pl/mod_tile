@@ -181,20 +181,6 @@ void* expire_worker(void *arg)
                 enqueue(curr_request->mapname, curr_request->x, curr_request->y, curr_request->z);
                 stats->num_render++;
             }
-            /*
-             if (!(num_render % 10))
-             {
-             gettimeofday(&end, NULL);
-             printf("\n");
-             printf("Meta tiles rendered: ");
-             display_rate(start, end, num_render);
-             printf("Total tiles rendered: ");
-             display_rate(start, end, num_render * METATILE * METATILE);
-             printf("Total tiles in input: %d\n", num_read);
-             printf("Total tiles expanded from input: %d\n", num_all);
-             printf("Total tiles ignored (not on disk): %d\n", num_ignore);
-             }
-             */
         } else {
             if (verbose)
                 printf("not in storage: %s\n", config->store->tile_storage_id(config->store, curr_request->mapname, "", curr_request->x, curr_request->y, curr_request->z, name));
@@ -287,8 +273,7 @@ int main(int argc, char **argv)
     // with the default METATILE==8 this is 3.
     int excess_zoomlevels = 0;
     int mt = METATILE;
-    while (mt > 1)
-    {
+    while (mt > 1) {
         excess_zoomlevels++;
         mt >>= 1;
     }
@@ -334,7 +319,7 @@ int main(int argc, char **argv)
                 mapname=strdup(optarg);
                 break;
             case 'n':   /* -n, --num-render-threads */
-                numRenderThreads=atoi(optarg);
+                numRenderThreads = atoi(optarg);
                 if (numRenderThreads <= 0) {
                     fprintf(stderr, "Invalid number of render threads, must be at least 1\n");
                     return 1;
@@ -372,9 +357,9 @@ int main(int argc, char **argv)
                 maxLoad = atoi(optarg);
                 break;
             case 'v':   /* -v, --verbose */
-                verbose=1;
+                verbose = 1;
                 break;
-            case 'e':   /* -n, --num-expire-threads */
+            case 'e':   /* -e, --num-expire-threads */
                 numExpireThreads = atoi(optarg);
                 if (numExpireThreads <= 0) {
                     fprintf(stderr, "Invalid number of expire threads, must be at least 1\n");
@@ -475,8 +460,14 @@ int main(int argc, char **argv)
         }
         //printf("loop: x=%d y=%d z=%d up to z=%d\n", x, y, z, minZoom);
         num_read++;
-        if (num_read % 100 == 0)
+        if (num_read % report_interval == 0)
             printf("Read and expanded %i tiles from list.\n", num_read);
+
+        // increase report interval from 100 to 1000 after
+        // 1000 tiles have been read.
+        if (report_interval == 100 && num_read > 1000) {
+            report_interval = 1000;
+        }
 
         for (; z>= minZoom; z--, x>>=1, y>>=1)
         {
