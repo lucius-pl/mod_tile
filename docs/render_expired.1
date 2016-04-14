@@ -1,4 +1,4 @@
-.TH RENDER_EXPIRED 1 "Jan 27, 2012"
+.TH RENDER_EXPIRED 1 "Apr 12, 2016"
 .\" Please adjust this date whenever revising the manpage.
 .SH NAME
 render_expired \- expires a list of map tiles so that they get re-rendered.
@@ -33,7 +33,7 @@ Render_expired takes a list of tiles from stdin which should be expired. The for
 .br
 1/1/0
 .PP
-render_expired will automatically expand the list to cover the effected tiles at other zoom levels.
+render_expired will automatically expand the list to cover the affected tiles at other zoom levels.
 .PP
 .SH OPTIONS
 This program follows the usual GNU command line syntax, with long
@@ -64,6 +64,9 @@ When expiring tiles of ZOOM or higher, delete them instead of re-rendering (defa
 .TP
 \fB\-T\fR|\-\-touch-from=ZOOM
 when expiring tiles of ZOOM or higher, touch them instead of re-rendering (default is off)
+.TP
+\fB\-e\fR|\-\-num-expire-threads=COUNT
+Use COUNT threads to perform expiry operations in parallel
 .PP
 .SH SEE ALSO
 .BR renderd (1),
