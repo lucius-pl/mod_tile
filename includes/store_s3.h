@@ -6,6 +6,8 @@ extern "C"
 {
 #endif
 
+#define TIMEOUT 10000
+
 #include "store.h"
 
 struct storage_backend* init_storage_s3(const char *connection_string);

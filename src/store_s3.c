@@ -140,7 +140,7 @@ static int store_s3_tile_read(struct storage_backend *store, const char *xmlconf
     request.tile_mod_time = 0;
     request.tile_size = 0;
 
-    S3_get_object(ctx->ctx, path, NULL, 0, 0, NULL, &getObjectHandler, &request);
+    S3_get_object(ctx->ctx, path, NULL, 0, 0, NULL, TIMEOUT, &getObjectHandler, &request);
 
     if (request.result != S3StatusOK) {
         const char *msg = "";
@@ -236,7 +236,7 @@ static struct stat_info store_s3_tile_stat(struct storage_backend *store, const 
     request.tile_mod_time = 0;
     request.tile_size = 0;
 
-    S3_head_object(ctx->ctx, path, NULL, &responseHandler, &request);
+    S3_head_object(ctx->ctx, path, NULL, TIMEOUT, &responseHandler, &request);
 
     if (request.result != S3StatusOK) {
         if (request.result == S3StatusHttpErrorNotFound) {
@@ -302,7 +302,7 @@ static int store_s3_metatile_write(struct storage_backend *store, const char *xm
     props.metaDataCount = 0;
     props.useServerSideEncryption = 0;
 
-    S3_put_object(ctx->ctx, path, sz, &props, NULL, &putObjectHandler, &request);
+    S3_put_object(ctx->ctx, path, sz, &props, NULL, TIMEOUT, &putObjectHandler, &request);
     free(path);
 
     if (request.result != S3StatusOK) {
@@ -346,7 +346,7 @@ static int store_s3_metatile_delete(struct storage_backend *store, const char *x
     request.tile_mod_time = 0;
     request.tile_size = 0;
 
-    S3_delete_object(ctx->ctx, path, NULL, &responseHandler, &request);
+    S3_delete_object(ctx->ctx, path, NULL, TIMEOUT, &responseHandler, &request);
     free(path);
 
     if (request.result != S3StatusOK) {
@@ -402,7 +402,7 @@ static int store_s3_metatile_expire(struct storage_backend *store, const char *x
 
     int64_t lastModified;
 
-    S3_copy_object(ctx->ctx, path, ctx->ctx->bucketName, path, &props, &lastModified, 0, NULL, NULL, &responseHandler, &request);
+    S3_copy_object(ctx->ctx, path, ctx->ctx->bucketName, path, &props, &lastModified, 0, NULL, NULL, TIMEOUT, &responseHandler, &request);
     free(path);
 
     if (request.result != S3StatusOK) {

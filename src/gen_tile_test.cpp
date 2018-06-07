@@ -60,6 +60,7 @@
 
 #ifdef HAVE_LIBS3
 #include <libs3.h>
+#include "store_s3.h"
 #endif
 
 #define NO_QUEUE_REQUESTS 9
@@ -1245,7 +1246,7 @@ TEST_CASE("storage-backend/s3", "S3 tile storage backend") {
     S3ResponseHandler handler;
     handler.completeCallback = &test_s3_complete_callback;
     handler.propertiesCallback = &test_s3_properties_callback;
-    S3_delete_object(&ctx, bucketpath, NULL, &handler, NULL);
+    S3_delete_object(&ctx, bucketpath, NULL, TIMEOUT, &handler, NULL);
 }
 
 #endif
