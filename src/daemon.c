@@ -430,8 +430,8 @@ int server_socket_init(renderd_config *sConfig) {
         addrI.sin6_addr = in6addr_any;
         addrI.sin6_port = htons(sConfig->ipport);
         if (bind(fd, (struct sockaddr *) &addrI, sizeof(addrI)) < 0) {
-            fprintf(stderr, "socket bind failed for: %s:%i\n",
-                    sConfig->iphostname, sConfig->ipport);
+            fprintf(stderr, "socket bind failed for: %s:%i: %s\n",
+                    sConfig->iphostname, sConfig->ipport, strerror(errno));
             close(fd);
             exit(3);
         }
@@ -453,7 +453,8 @@ int server_socket_init(renderd_config *sConfig) {
 
         old = umask(0); // Need daemon socket to be writeable by apache
         if (bind(fd, (struct sockaddr *) &addrU, sizeof(addrU)) < 0) {
-            fprintf(stderr, "socket bind failed for: %s\n", sConfig->socketname);
+            fprintf(stderr, "socket bind failed for: %s: %s\n",
+                    sConfig->socketname, strerror(errno));
             close(fd);
             exit(3);
         }
@@ -932,7 +933,7 @@ int main(int argc, char **argv)
     if (foreground) {
         fprintf(stderr, "Running in foreground mode...\n");
     } else {
-        if (daemon(0, 0) != 0) {
+        if (daemon(1, 1) != 0) {
             fprintf(stderr, "can't daemonize: %s\n", strerror(errno));
         }
         /* write pid file */
