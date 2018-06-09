@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <pthread.h>
+#include <regex.h>
 
 #ifdef HAVE_LIBS3
 #include <libs3.h>
@@ -483,8 +484,28 @@ struct storage_backend* init_storage_s3(const char *connection_string)
             "init_storage_s3: Support for libs3 and therefore S3 storage has not been compiled into this program");
     return NULL;
 #else
-    if (strstr(connection_string, "s3://") != connection_string) {
-        log_message(STORE_LOGLVL_ERR, "init_storage_s3: connection string invalid for S3 storage!");
+    const char* regex = "^s3://([A-Z0-9]{20}|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\}):"                              /* accees key id */
+                        "([A-Za-z0-9/+=]{40}|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})@?"                             /* security access key */
+                        "(s3-[a-z]{2}-[a-z]{4,9}-[1-9]{1}.amazonaws.com|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})?/"  /* host name */
+                        "([a-zA-Z0-9-]{3,63}|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})@?"                             /* bucket name */
+                        "([a-z]{2}-[a-z]{4,9}-[1-9]{1}|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})?/?"                  /* auth region */
+                        "([0-9a-zA-Z!-_.*'()]{1,1024}|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})?$";                   /* base path */
+    regex_t preg;
+    regmatch_t pmatch[7];
+
+    int errcode = regcomp(&preg, regex, REG_EXTENDED);
+    if(errcode != 0) {
+        const size_t errbuf_size = 100;
+        char errbuf[errbuf_size];
+        regerror(errcode, &preg, errbuf, errbuf_size);
+        log_message(STORE_LOGLVL_ERR, "init_storage_s3: regular expression pattern for connection string invalid: error code: %d %s", errcode, errbuf);
+        return NULL;
+    }
+
+    if(regexec(&preg, connection_string, 7, pmatch, 0) == REG_NOMATCH) {
+        const char* connection_string_usage = "s3://<access key id>:<secret access key>[@<hostname>]/<bucket>[@region][/<basepath>]";
+        log_message(STORE_LOGLVL_ERR, "init_storage_s3: connection string invalid for S3 storage!\nUsage: %s",connection_string_usage);
+        regfree(&preg);
         return NULL;
     }
 
@@ -519,8 +540,6 @@ struct storage_backend* init_storage_s3(const char *connection_string)
         return NULL;
     }
 
-    // parse out the context information from the URL:
-    //   s3://<key id>:<secret key>[@<hostname>]/<bucket>[@region][/<basepath>]
     struct S3BucketContext *bctx = ctx->ctx = malloc(sizeof(struct S3BucketContext));
 
     ctx->urlcopy = strdup(connection_string);
@@ -531,65 +550,32 @@ struct storage_backend* init_storage_s3(const char *connection_string)
         return NULL;
     }
 
-    // advance past "s3://"
-    char *fullurl = &ctx->urlcopy[5];
-    bctx->accessKeyId = strsep(&fullurl, ":");
-    char *nextSlash = strchr(fullurl, '/');
-    char *nextAt = strchr(fullurl, '@');
-    if ((nextAt != NULL) && (nextAt < nextSlash)) {
-        // there's an S3 host name in the URL
-        bctx->secretAccessKey = strsep(&fullurl, "@");
-        bctx->hostName = strsep(&fullurl, "/");
-        if (bctx->hostName != NULL && strlen(bctx->hostName) <= 0) {
-            bctx->hostName = NULL;
-        }
-    } else {
-        bctx->secretAccessKey = strsep(&fullurl, "/");
+    for(int i=1; i < 6; i++) {
+        *(ctx->urlcopy + pmatch[i].rm_eo) = 0;
+    }
+
+    bctx->accessKeyId = ctx->urlcopy + pmatch[1].rm_so;
+    bctx->secretAccessKey = ctx->urlcopy + pmatch[2].rm_so;
+    bctx->hostName = ctx->urlcopy + pmatch[3].rm_so;
+    bctx->bucketName = ctx->urlcopy + pmatch[4].rm_so;
+    bctx->authRegion = ctx->urlcopy + pmatch[5].rm_so;
+    ctx->basepath = ctx->urlcopy + pmatch[6].rm_so;
+    regfree(&preg);
+
+    /* set null if empty to ignore them by libs3, otherwise the following errors occur:
+        * 43 (NameLookupError)
+        * 128(ErrorUnknown)/The authorization header is malformed; a non-empty region must be provided in the credential.
+       TODO: it should be fixed in libs3
+    */
+
+    if (bctx->hostName != NULL && strlen(bctx->hostName) <= 0) {
         bctx->hostName = NULL;
     }
 
-    if (strchr(fullurl, '@')) {
-        // there's a region name with the bucket name
-        bctx->bucketName = strsep(&fullurl, "@");
-        bctx->authRegion = strsep(&fullurl, "/");
-    }
-    else {
-        bctx->bucketName = strsep(&fullurl, "/");
+    if (bctx->authRegion != NULL && strlen(bctx->authRegion) <= 0) {
         bctx->authRegion = NULL;
     }
 
-    if (bctx->accessKeyId != NULL && strlen(bctx->accessKeyId) <= 0) {
-        bctx->accessKeyId = NULL;
-    }
-    if (bctx->secretAccessKey != NULL && strlen(bctx->secretAccessKey) <= 0) {
-        bctx->secretAccessKey = NULL;
-    }
-    if (bctx->bucketName != NULL && strlen(bctx->bucketName) <= 0) {
-        bctx->bucketName = NULL;
-    }
-
-    if (bctx->accessKeyId == NULL) {
-        log_message(STORE_LOGLVL_ERR, "init_storage_s3: S3 access key ID not provided in connection string!");
-        free(ctx);
-        free(store);
-        return NULL;
-    }
-
-    if (bctx->secretAccessKey == NULL) {
-        log_message(STORE_LOGLVL_ERR, "init_storage_s3: S3 secret access key not provided in connection string!");
-        free(ctx);
-        free(store);
-        return NULL;
-    }
-
-    if (bctx->bucketName == NULL) {
-        log_message(STORE_LOGLVL_ERR, "init_storage_s3: S3 bucket name not provided in connection string!");
-        free(ctx);
-        free(store);
-        return NULL;
-    }
-
-    ctx->basepath = fullurl;
 
     bctx->accessKeyId = env_expand(bctx->accessKeyId);
     if (bctx->accessKeyId == NULL) {
@@ -659,3 +645,4 @@ struct storage_backend* init_storage_s3(const char *connection_string)
     return store;
 #endif
 }
+
