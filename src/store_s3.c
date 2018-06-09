@@ -576,7 +576,9 @@ struct storage_backend* init_storage_s3(const char *connection_string)
         bctx->authRegion = NULL;
     }
 
+    /* get connection string parameters from environment variables */
 
+    /* access key id */
     bctx->accessKeyId = env_expand(bctx->accessKeyId);
     if (bctx->accessKeyId == NULL) {
         free(ctx);
@@ -585,6 +587,7 @@ struct storage_backend* init_storage_s3(const char *connection_string)
     }
     bctx->accessKeyId = url_decode(bctx->accessKeyId);
 
+    /* secret access key */
     bctx->secretAccessKey = env_expand(bctx->secretAccessKey);
     if (bctx->secretAccessKey == NULL) {
         free(ctx);
@@ -593,6 +596,7 @@ struct storage_backend* init_storage_s3(const char *connection_string)
     }
     bctx->secretAccessKey = url_decode(bctx->secretAccessKey);
 
+    /* host name */
     if (bctx->hostName) {
         bctx->hostName = env_expand(bctx->hostName);
         if (bctx->hostName == NULL) {
@@ -603,6 +607,7 @@ struct storage_backend* init_storage_s3(const char *connection_string)
         bctx->hostName = url_decode(bctx->hostName);
     }
 
+    /* bucket name */
     bctx->bucketName = env_expand(bctx->bucketName);
     if (bctx->bucketName == NULL) {
         free(ctx);
@@ -611,17 +616,31 @@ struct storage_backend* init_storage_s3(const char *connection_string)
     }
     bctx->bucketName = url_decode(bctx->bucketName);
 
+    /* auth region */
+    if(bctx->authRegion) {
+        bctx->authRegion = env_expand(bctx->authRegion);
+        if (bctx->authRegion == NULL) {
+          free(ctx);
+          free(store);
+          return NULL;
+        }
+        bctx->authRegion = url_decode(bctx->authRegion);
+    }
+
+    /* base path */
+    if(ctx->basepath) {
+        ctx->basepath = env_expand(ctx->basepath);
+        if (ctx->basepath == NULL) {
+          free(ctx);
+          free(store);
+          return NULL;
+        }
+        ctx->basepath = url_decode(ctx->basepath);
+    }
+
     bctx->protocol = S3ProtocolHTTPS;
     bctx->securityToken = NULL;
     bctx->uriStyle = S3UriStyleVirtualHost;
-
-    ctx->basepath = env_expand(ctx->basepath);
-    if (ctx->basepath == NULL) {
-        free(ctx);
-        free(store);
-        return NULL;
-    }
-    ctx->basepath = url_decode(ctx->basepath);
 
     if (bctx->hostName && bctx->authRegion) {
         log_message(STORE_LOGLVL_DEBUG, "init_storage_s3 completed keyid: %s, key: %s, host: %s, region: %s, bucket: %s, basepath: %s", ctx->ctx->accessKeyId, ctx->ctx->secretAccessKey, ctx->ctx->hostName, ctx->ctx->authRegion, ctx->ctx->bucketName, ctx->basepath);
