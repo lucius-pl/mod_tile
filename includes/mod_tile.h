@@ -119,6 +119,7 @@ typedef struct {
 	int delaypoolRenderSize;
 	long delaypoolRenderRate;
     int bulkMode;
+    int disableHttpCacheHeaders;
 } tile_server_conf;
 
 typedef struct tile_request_data {
