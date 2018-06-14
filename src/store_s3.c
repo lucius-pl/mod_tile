@@ -10,6 +10,8 @@
 #include <regex.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #ifdef HAVE_LIBS3
 #include <libs3.h>
@@ -49,6 +51,12 @@ struct store_s3_ctx {
     const char *cacheSize;
 };
 
+/*****************************************************************************/
+
+
+
+/*****************************************************************************/
+
 static int store_s3_xyz_to_storagekey(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, char *key, size_t keylen)
 {
     int offset;
@@ -60,6 +68,8 @@ static int store_s3_xyz_to_storagekey(struct storage_backend *store, const char 
 
     return offset;
 }
+
+/*****************************************************************************/
 
 static S3Status store_s3_properties_callback(const S3ResponseProperties *properties, void *callbackData)
 {
@@ -80,6 +90,8 @@ static S3Status store_s3_properties_callback(const S3ResponseProperties *propert
     return S3StatusOK;
 }
 
+/*****************************************************************************/
+
 S3Status store_s3_object_data_callback(int bufferSize, const char *buffer, void *callbackData)
 {
     struct s3_tile_request *rqst = (struct s3_tile_request*) callbackData;
@@ -99,6 +111,8 @@ S3Status store_s3_object_data_callback(int bufferSize, const char *buffer, void 
     return S3StatusOK;
 }
 
+/*****************************************************************************/
+
 int store_s3_put_object_data_callback(int bufferSize, char *buffer, void *callbackData)
 {
     struct s3_tile_request *rqst = (struct s3_tile_request*) callbackData;
@@ -114,6 +128,8 @@ int store_s3_put_object_data_callback(int bufferSize, char *buffer, void *callba
     return bytesToWrite;
 }
 
+/*****************************************************************************/
+
 void store_s3_complete_callback(S3Status status, const S3ErrorDetails *errorDetails, void *callbackData)
 {
     struct s3_tile_request *rqst = (struct s3_tile_request*) callbackData;
@@ -124,6 +140,8 @@ void store_s3_complete_callback(S3Status status, const S3ErrorDetails *errorDeta
     rqst->result = status;
     rqst->error_details = errorDetails;
 }
+
+/*****************************************************************************/
 
 static int store_s3_tile_read(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, char *buf, size_t sz, int *compressed, char *log_msg)
 {
@@ -210,22 +228,112 @@ static int store_s3_tile_read(struct storage_backend *store, const char *xmlconf
     return tile_size;
 }
 
-static struct stat_info store_s3_tile_stat(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z)
-{
+/*****************************************************************************/
+
+static void store_s3_tile_stat_with_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, struct stat_info *tile_stat) {
+
+    char cachePath[PATH_MAX];
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
+    struct stat st_stat;
 
-    struct stat_info tile_stat;
-    tile_stat.size = -1;
-    tile_stat.expired = 0;
-    tile_stat.mtime = 0;
-    tile_stat.atime = 0;
-    tile_stat.ctime = 0;
+    /* set meta tile stat from cache */
 
-    char *path = malloc(PATH_MAX);
-    if (NULL == path) {
-        log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: failed to allocate memory for tile path!");
-        return tile_stat;
+    xyzo_to_meta(cachePath, PATH_MAX, ctx->cachePath, xmlconfig, options, x, y, z);
+
+    if(! stat(cachePath, &st_stat)) {
+        tile_stat->size = st_stat.st_size;
+        tile_stat->mtime = st_stat.st_mtime;
+        tile_stat->atime = st_stat.st_atime;
+        tile_stat->ctime = st_stat.st_ctime;
+
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: successfully read properties of metatile from cache %s", cachePath);
+
+        return;
     }
+
+    /* get meta tile from S3 */
+
+    char s3Path[PATH_MAX];
+    store_s3_xyz_to_storagekey(store, xmlconfig, options, x, y, z, s3Path, PATH_MAX);
+
+    struct S3GetObjectHandler getObjectHandler;
+    getObjectHandler.responseHandler.propertiesCallback = &store_s3_properties_callback;
+    getObjectHandler.responseHandler.completeCallback = &store_s3_complete_callback;
+    getObjectHandler.getObjectDataCallback = &store_s3_object_data_callback;
+
+    struct s3_tile_request request;
+    request.path = s3Path;
+    request.cur_offset = 0;
+    request.tile = NULL;
+    request.tile_expired = 0;
+    request.tile_mod_time = 0;
+    request.tile_size = 0;
+
+    S3_get_object(ctx->ctx, s3Path, NULL, 0, 0, NULL, TIMEOUT, &getObjectHandler, &request);
+
+    if (request.result != S3StatusOK) {
+        const char *msg = "";
+        if (request.error_details && request.error_details->message) {
+            msg = request.error_details->message;
+        }
+        return;
+    }
+
+    log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: retrieved metatile %s from S3", s3Path);
+
+    /* set meta tile stat from S3 */
+
+    tile_stat->size = request.tile_size;
+    tile_stat->expired = request.tile_expired;
+    tile_stat->mtime = request.tile_mod_time;
+
+    /* save meta tile to cache */
+
+    int fd;
+    char cachePathTmp[PATH_MAX + 24];
+    int res;
+
+    snprintf(cachePathTmp, PATH_MAX + 24, "%s.%lu", cachePath, pthread_self());
+
+    if (mkdirp(cachePathTmp)) {
+         log_message(STORE_LOGLVL_WARNING, "store_s3_tile_stat: error creating cache directory structure for meta tile: %s", cachePath);
+         free(request.tile);
+         return;
+    }
+
+    fd = open(cachePathTmp, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    if (fd < 0) {
+        log_message(STORE_LOGLVL_WARNING, "store_s3_tile_stat: error creating metatile %s in cache: %s\n", cachePathTmp, strerror(errno));
+        free(request.tile);
+        return;
+    }
+
+    res = write(fd, request.tile, request.tile_size);
+    if (res != request.tile_size) {
+        log_message(STORE_LOGLVL_WARNING, "store_s3_tile_stat: error writing metatile %s in cache: %s\n", cachePathTmp, strerror(errno));
+        close(fd);
+        free(request.tile);
+        return;
+    }
+    close(fd);
+    free(request.tile);
+
+    rename(cachePathTmp, cachePath);
+
+    log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: save metatile %s to cache", cachePath);
+
+    /* TODO
+       * inform cleaner to check cache size
+       * set metatile stat in cache according to S3 if needed 
+    */
+}
+
+/*****************************************************************************/
+
+static void store_s3_tile_stat_without_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, struct stat_info *tile_stat) {
+
+    char path[PATH_MAX];
+    struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
 
     store_s3_xyz_to_storagekey(store, xmlconfig, options, x, y, z, path, PATH_MAX);
     //log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: getting properties for object %s", path);
@@ -257,18 +365,39 @@ static struct stat_info store_s3_tile_stat(struct storage_backend *store, const 
             }
             log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: failed to retrieve object properties for %s: %d (%s) %s", path, request.result, S3_get_status_name(request.result), msg);
         }
-        free(path);
-        return tile_stat;
+        return;
     }
 
     log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: successfully read properties of %s", path);
 
-    tile_stat.size = request.tile_size;
-    tile_stat.expired = request.tile_expired;
-    tile_stat.mtime = request.tile_mod_time;
-    free(path);
+    tile_stat->size = request.tile_size;
+    tile_stat->expired = request.tile_expired;
+    tile_stat->mtime = request.tile_mod_time;
+}
+
+/*****************************************************************************/
+
+static struct stat_info store_s3_tile_stat(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z)
+{
+    struct stat_info tile_stat;
+    tile_stat.size = -1;
+    tile_stat.expired = 0;
+    tile_stat.mtime = 0;
+    tile_stat.atime = 0;
+    tile_stat.ctime = 0;
+
+    char* cachePath = ((struct store_s3_ctx*)store->storage_ctx)->cachePath;
+
+    if(strlen(cachePath) > 0 ) {
+        store_s3_tile_stat_with_cache(store, xmlconfig, options, x, y, z, &tile_stat);
+    } else {
+        store_s3_tile_stat_without_cache(store, xmlconfig, options, x, y, z, &tile_stat);
+    }
+
     return tile_stat;
 }
+
+/*****************************************************************************/
 
 static char* store_s3_tile_storage_id(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, char *string)
 {
@@ -276,6 +405,8 @@ static char* store_s3_tile_storage_id(struct storage_backend *store, const char 
     store_s3_xyz_to_storagekey(store, xmlconfig, options, x, y, z, string, PATH_MAX);
     return string;
 }
+
+/*****************************************************************************/
 
 static int store_s3_metatile_write(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, const char *buf, int sz)
 {
@@ -333,6 +464,8 @@ static int store_s3_metatile_write(struct storage_backend *store, const char *xm
     return sz;
 }
 
+/*****************************************************************************/
+
 static int store_s3_metatile_delete(struct storage_backend *store, const char *xmlconfig, int x, int y, int z)
 {
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
@@ -370,6 +503,8 @@ static int store_s3_metatile_delete(struct storage_backend *store, const char *x
 
     return 0;
 }
+
+/*****************************************************************************/
 
 static int store_s3_metatile_expire(struct storage_backend *store, const char *xmlconfig, int x, int y, int z)
 {
@@ -427,6 +562,8 @@ static int store_s3_metatile_expire(struct storage_backend *store, const char *x
     return 0;
 }
 
+/*****************************************************************************/
+
 static int store_s3_close_storage(struct storage_backend *store)
 {
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
@@ -442,6 +579,8 @@ static int store_s3_close_storage(struct storage_backend *store)
 
     return 0;
 }
+
+/*****************************************************************************/
 
 static char* url_decode(const char *src)
 {
@@ -466,6 +605,8 @@ static char* url_decode(const char *src)
     }
     return dst;
 }
+
+/*****************************************************************************/
 
 static const char* env_expand(const char *src)
 {
