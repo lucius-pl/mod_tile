@@ -8,6 +8,8 @@
 #include <sys/types.h>
 #include <pthread.h>
 #include <regex.h>
+#include <errno.h>
+#include <unistd.h>
 
 #ifdef HAVE_LIBS3
 #include <libs3.h>
@@ -19,6 +21,9 @@
 #include "metatile.h"
 #include "render_config.h"
 #include "protocol.h"
+
+
+#define DEFAULT_CACHE_SIZE "100MB"
 
 #ifdef HAVE_LIBS3
 
@@ -40,6 +45,8 @@ struct store_s3_ctx {
     S3BucketContext* ctx;
     const char *basepath;
     char *urlcopy;
+    const char *cachePath;
+    const char *cacheSize;
 };
 
 static int store_s3_xyz_to_storagekey(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, char *key, size_t keylen)
@@ -254,7 +261,7 @@ static struct stat_info store_s3_tile_stat(struct storage_backend *store, const 
         return tile_stat;
     }
 
-    //log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: successfully read properties of %s", path);
+    log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: successfully read properties of %s", path);
 
     tile_stat.size = request.tile_size;
     tile_stat.expired = request.tile_expired;
@@ -477,6 +484,8 @@ static const char* env_expand(const char *src)
 }
 #endif //Have libs3
 
+/*****************************************************************************/
+
 struct storage_backend* init_storage_s3(const char *connection_string)
 {
 #ifndef HAVE_LIBS3
@@ -489,9 +498,10 @@ struct storage_backend* init_storage_s3(const char *connection_string)
                         "(s3-[a-z]{2}-[a-z]{4,9}-[1-9]{1}.amazonaws.com|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})?/"  /* host name */
                         "([a-zA-Z0-9-]{3,63}|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})@?"                             /* bucket name */
                         "([a-z]{2}-[a-z]{4,9}-[1-9]{1}|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})?/?"                  /* auth region */
-                        "([0-9a-zA-Z/!\\-_.*'()]{1,1024}|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})?$";                /* base path */
+                        "([0-9a-zA-Z/!\\-_.*'()]{1,1024}|\\$\\{[a-zA-Z_][a-zA-Z_0-9]*\\})?@?"                /* base path */
+                        "c?a?c?h?e?:?(/[^\\0:]*)?:?([1-9][0-9]*[KMGT]B)?$";                                  /* cache */
     regex_t preg;
-    regmatch_t pmatch[7];
+    regmatch_t pmatch[9];
 
     int errcode = regcomp(&preg, regex, REG_EXTENDED);
     if(errcode != 0) {
@@ -502,8 +512,8 @@ struct storage_backend* init_storage_s3(const char *connection_string)
         return NULL;
     }
 
-    if(regexec(&preg, connection_string, 7, pmatch, 0) == REG_NOMATCH) {
-        const char* connection_string_usage = "s3://<access key id>:<secret access key>[@<hostname>]/<bucket>[@region][/<basepath>]";
+    if(regexec(&preg, connection_string, 9, pmatch, 0) == REG_NOMATCH) {
+        const char* connection_string_usage = "s3://<access key id>:<secret access key>[@<hostname>]/<bucket>[@region][/<basepath>][@cache:<dir>:<size>]";
         log_message(STORE_LOGLVL_ERR, "init_storage_s3: connection string invalid for S3 storage!\nUsage: %s",connection_string_usage);
         regfree(&preg);
         return NULL;
@@ -528,6 +538,9 @@ struct storage_backend* init_storage_s3(const char *connection_string)
         log_message(STORE_LOGLVL_DEBUG, "init_storage_s3: global init of libs3");
         res = S3_initialize(NULL, S3_INIT_ALL, NULL);
         store_s3_initialized = 1;
+        #ifdef RENDERD
+            log_message(STORE_LOGLVL_DEBUG, "init_storage_s3: Starting cache cleaner thread");
+        #endif
     } else {
         res = S3StatusOK;
     }
@@ -550,7 +563,7 @@ struct storage_backend* init_storage_s3(const char *connection_string)
         return NULL;
     }
 
-    for(int i=1; i < 6; i++) {
+    for(int i=1; i < 8; i++) {
         *(ctx->urlcopy + pmatch[i].rm_eo) = 0;
     }
 
@@ -560,6 +573,8 @@ struct storage_backend* init_storage_s3(const char *connection_string)
     bctx->bucketName = ctx->urlcopy + pmatch[4].rm_so;
     bctx->authRegion = ctx->urlcopy + pmatch[5].rm_so;
     ctx->basepath = ctx->urlcopy + pmatch[6].rm_so;
+    ctx->cachePath = ctx->urlcopy + pmatch[7].rm_so;
+    ctx->cacheSize = ctx->urlcopy + pmatch[8].rm_so;
     regfree(&preg);
 
     /* set null if empty to ignore them by libs3, otherwise the following errors occur:
@@ -638,19 +653,28 @@ struct storage_backend* init_storage_s3(const char *connection_string)
         ctx->basepath = url_decode(ctx->basepath);
     }
 
+    /* validation */
+
+    /* check if cache directory exists and it is writeable */
+    if(strlen(ctx->cachePath) > 0) {
+        if(access(ctx->cachePath, W_OK) == -1) {
+            log_message(STORE_LOGLVL_ERR, "init_storage_s3: cache directory path %s is inncorect: %s", ctx->cachePath, strerror(errno));
+            free(ctx);
+            free(store);
+            return NULL;
+        }
+        /* set default cache size if it is not provided in connection string */
+        if(strlen(ctx->cacheSize) <= 0) {
+            ctx->cacheSize = DEFAULT_CACHE_SIZE;
+        }
+    }
+
+    log_message(STORE_LOGLVL_DEBUG, "init_storage_s3 completed keyid: %s, key: %s, host: %s, region: %s, bucket: %s, basepath: %s, cachepath: %s, cachesize=%s", ctx->ctx->accessKeyId, ctx->ctx->secretAccessKey, ctx->ctx->hostName, ctx->ctx->authRegion, ctx->ctx->bucketName, ctx->basepath, ctx->cachePath, ctx->cacheSize);
+
     bctx->protocol = S3ProtocolHTTPS;
     bctx->securityToken = NULL;
     bctx->uriStyle = S3UriStyleVirtualHost;
 
-    if (bctx->hostName && bctx->authRegion) {
-        log_message(STORE_LOGLVL_DEBUG, "init_storage_s3 completed keyid: %s, key: %s, host: %s, region: %s, bucket: %s, basepath: %s", ctx->ctx->accessKeyId, ctx->ctx->secretAccessKey, ctx->ctx->hostName, ctx->ctx->authRegion, ctx->ctx->bucketName, ctx->basepath);
-    } else if (bctx->hostName) {
-        log_message(STORE_LOGLVL_DEBUG, "init_storage_s3 completed keyid: %s, key: %s, host: %s, bucket: %s, basepath: %s", ctx->ctx->accessKeyId, ctx->ctx->secretAccessKey, ctx->ctx->hostName, ctx->ctx->bucketName, ctx->basepath);
-    } else if (bctx->authRegion) {
-        log_message(STORE_LOGLVL_DEBUG, "init_storage_s3 completed keyid: %s, key: %s, region: %s, bucket: %s, basepath: %s", ctx->ctx->accessKeyId, ctx->ctx->secretAccessKey, ctx->ctx->authRegion, ctx->ctx->bucketName, ctx->basepath);
-    } else {
-        log_message(STORE_LOGLVL_DEBUG, "init_storage_s3 completed keyid: %s, key: %s, bucket: %s, basepath: %s", ctx->ctx->accessKeyId, ctx->ctx->secretAccessKey, ctx->ctx->bucketName, ctx->basepath);
-    }
     store->storage_ctx = ctx;
 
     store->tile_read = &store_s3_tile_read;
