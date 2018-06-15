@@ -29,6 +29,8 @@
 
 #ifdef HAVE_LIBS3
 
+#define MSG request.error_details && request.error_details->message ? request.error_details->message : ""
+
 static pthread_mutex_t qLock;
 static int store_s3_initialized = 0;
 
@@ -143,7 +145,180 @@ void store_s3_complete_callback(S3Status status, const S3ErrorDetails *errorDeta
 
 /*****************************************************************************/
 
-static int store_s3_tile_read(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, char *buf, size_t sz, int *compressed, char *log_msg)
+static struct s3_tile_request store_s3_get_tile_from_s3(S3BucketContext* ctx, const char* path, const char* source) {
+
+    struct S3GetObjectHandler getObjectHandler;
+    getObjectHandler.responseHandler.propertiesCallback = &store_s3_properties_callback;
+    getObjectHandler.responseHandler.completeCallback = &store_s3_complete_callback;
+    getObjectHandler.getObjectDataCallback = &store_s3_object_data_callback;
+
+    struct s3_tile_request request;
+    request.path = path;
+    request.cur_offset = 0;
+    request.tile = NULL;
+    request.tile_expired = 0;
+    request.tile_mod_time = 0;
+    request.tile_size = 0;
+
+    S3_get_object(ctx, path, NULL, 0, 0, NULL, TIMEOUT, &getObjectHandler, &request);
+
+    if (request.result != S3StatusOK) {
+        log_message(STORE_LOGLVL_ERR, "%s: failed to get metatile from S3: %d(%s)/%s", source, request.result, S3_get_status_name(request.result), MSG);
+        return request;
+    }
+
+    log_message(STORE_LOGLVL_DEBUG, "%s: got metatile %s from S3", source, path);
+
+    return request;
+}
+
+/*****************************************************************************/
+
+static void store_s3_save_tile_to_cache(char* metatile, size_t metatile_size, char* cachePath, const char* source) {
+    char cachePathTmp[PATH_MAX + 24];
+
+    snprintf(cachePathTmp, PATH_MAX + 24, "%s.%lu", cachePath, pthread_self());
+
+    if (mkdirp(cachePathTmp)) {
+         log_message(STORE_LOGLVL_WARNING, "%s: error creating cache directory structure for meta tile: %s", source, cachePath);
+         return;
+    }
+
+    int fd = open(cachePathTmp, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    if (fd < 0) {
+        log_message(STORE_LOGLVL_WARNING, "%s: error creating metatile %s in cache: %s", source, cachePathTmp, strerror(errno));
+        return;
+    }
+
+    int res = write(fd, metatile, metatile_size);
+    if (res != metatile_size) {
+        log_message(STORE_LOGLVL_WARNING, "%s: error writing metatile %s in cache: %s", source, cachePathTmp, strerror(errno));
+        close(fd);
+        return;
+    }
+    close(fd);
+
+    rename(cachePathTmp, cachePath);
+
+    log_message(STORE_LOGLVL_DEBUG, "%s: save metatile %s to cache", source, cachePath);
+
+    /* TODO: inform cleaner to check cache size */
+}
+
+/*****************************************************************************/
+
+static int store_s3_tile_read_with_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, char *buf, size_t sz, int *compressed, char *log_msg) {
+    char path[PATH_MAX];
+    struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
+    struct stat st_stat;
+    struct s3_tile_request request;
+    char *metatile;
+    size_t metatile_size;
+
+    /* check if metatile file exists in cache */
+
+    int meta_offset = xyzo_to_meta(path, PATH_MAX, ctx->cachePath, xmlconfig, options, x, y, z);
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_read: metatile %s does not exist in cache: %s", path, strerror(errno));
+
+        /* get metatile file from S3 */
+        char s3Path[PATH_MAX];
+        meta_offset = store_s3_xyz_to_storagekey(store, xmlconfig, options, x, y, z, s3Path, PATH_MAX);
+        request = store_s3_get_tile_from_s3(ctx->ctx, s3Path, "store_s3_tile_read");
+        if(request.tile == NULL) {
+            return -1;
+        }
+        metatile = request.tile;
+        metatile_size = request.tile_size;
+
+        /* save metatile file to cache */
+
+        store_s3_save_tile_to_cache(request.tile, request.tile_size, path, "store_s3_tile_read");
+
+    } else {
+
+        /* get metatile file from cache */
+
+        if(fstat(fd, &st_stat)) {
+            log_message(STORE_LOGLVL_ERR, "store_s3_tile_read: failed to get stat for %s metatile from cache: %s", path, strerror(errno));
+            return - 1;
+        }
+
+        metatile_size = st_stat.st_size;
+        metatile = (char*)malloc(sizeof(char) * metatile_size);
+        if(metatile == NULL) {
+            log_message(STORE_LOGLVL_ERR, "store_s3_tile_read: failed to allocate memory for %s metatile from cache: %s", path, strerror(errno));
+            close(fd);
+            return -1;
+        }
+
+        int pos = 0;
+        while (pos < metatile_size) {
+           size_t len = metatile_size - pos;
+           int got = read(fd, metatile + pos, len);
+           if (got < 0) {
+               log_message(STORE_LOGLVL_ERR, "store_s3_tile_read: failed to read data from %s metatile from cache: %s", path, strerror(errno));
+               close(fd);
+               free(metatile);
+               return -2;
+           } else if (got > 0) {
+               pos += got;
+           } else {
+              break;
+           }
+        }
+        close(fd);
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_read: retrieved metatile from cache: %s", path);
+    }
+
+    /* extract tile from metatile */
+
+    if (metatile_size < METATILE_HEADER_LEN) {
+        snprintf(log_msg, PATH_MAX - 1, "Meta file %s too small to contain header\n", path);
+        free(metatile);
+        return -3;
+    }
+    struct meta_layout *m = (struct meta_layout*)metatile;
+
+    if (memcmp(m->magic, META_MAGIC, strlen(META_MAGIC))) {
+        if (memcmp(m->magic, META_MAGIC_COMPRESSED, strlen(META_MAGIC_COMPRESSED))) {
+            snprintf(log_msg, PATH_MAX - 1, "Meta file %s header magic mismatch\n", path);
+            free(metatile);
+            return -4;
+        } else {
+            *compressed = 1;
+        }
+    } else {
+        *compressed = 0;
+    }
+
+    if (m->count != (METATILE * METATILE)) {
+        snprintf(log_msg, PATH_MAX - 1, "Meta file %s header bad count %d != %d\n", path, m->count, METATILE * METATILE);
+        free(metatile);
+        return -5;
+    }
+
+    int buffer_offset = m->index[meta_offset].offset;
+    int tile_size = m->index[meta_offset].size;
+
+    if (tile_size > sz) {
+        snprintf(log_msg, PATH_MAX - 1, "tile of length %d too big to fit buffer of length %zd\n", tile_size, sz);
+        free(metatile);
+        return -6;
+    }
+
+    memcpy(buf, metatile + buffer_offset, tile_size);
+
+    free(metatile);
+
+    return tile_size;
+}
+
+/*****************************************************************************/
+
+static int store_s3_tile_read_without_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, char *buf, size_t sz, int *compressed, char *log_msg)
 {
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
     char *path = malloc(PATH_MAX);
@@ -230,13 +405,26 @@ static int store_s3_tile_read(struct storage_backend *store, const char *xmlconf
 
 /*****************************************************************************/
 
+static int store_s3_tile_read(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, char *buf, size_t sz, int *compressed, char *log_msg) {
+
+    const char* cachePath = ((struct store_s3_ctx*)store->storage_ctx)->cachePath;
+
+    if(strlen(cachePath) > 0 ) {
+        return store_s3_tile_read_with_cache(store, xmlconfig, options, x, y, z, buf, sz, compressed, log_msg);
+    } else {
+        return store_s3_tile_read_without_cache(store, xmlconfig, options, x, y, z, buf, sz, compressed, log_msg);
+    }
+}
+
+/*****************************************************************************/
+
 static void store_s3_tile_stat_with_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, struct stat_info *tile_stat) {
 
     char cachePath[PATH_MAX];
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
     struct stat st_stat;
 
-    /* set meta tile stat from cache */
+    /* get metatile file stat from cache */
 
     xyzo_to_meta(cachePath, PATH_MAX, ctx->cachePath, xmlconfig, options, x, y, z);
 
@@ -251,81 +439,28 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
         return;
     }
 
-    /* get meta tile from S3 */
+    /* get metatile file from S3 */
 
     char s3Path[PATH_MAX];
     store_s3_xyz_to_storagekey(store, xmlconfig, options, x, y, z, s3Path, PATH_MAX);
-
-    struct S3GetObjectHandler getObjectHandler;
-    getObjectHandler.responseHandler.propertiesCallback = &store_s3_properties_callback;
-    getObjectHandler.responseHandler.completeCallback = &store_s3_complete_callback;
-    getObjectHandler.getObjectDataCallback = &store_s3_object_data_callback;
-
-    struct s3_tile_request request;
-    request.path = s3Path;
-    request.cur_offset = 0;
-    request.tile = NULL;
-    request.tile_expired = 0;
-    request.tile_mod_time = 0;
-    request.tile_size = 0;
-
-    S3_get_object(ctx->ctx, s3Path, NULL, 0, 0, NULL, TIMEOUT, &getObjectHandler, &request);
-
-    if (request.result != S3StatusOK) {
-        const char *msg = "";
-        if (request.error_details && request.error_details->message) {
-            msg = request.error_details->message;
-        }
+    struct s3_tile_request request = store_s3_get_tile_from_s3(ctx->ctx, s3Path, "store_s3_tile_stat");
+    if(request.tile == NULL) {
         return;
     }
 
-    log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: retrieved metatile %s from S3", s3Path);
-
-    /* set meta tile stat from S3 */
+    /* get metatile file stat from S3 */
 
     tile_stat->size = request.tile_size;
     tile_stat->expired = request.tile_expired;
     tile_stat->mtime = request.tile_mod_time;
 
-    /* save meta tile to cache */
+    /* save metatile file to cache */
 
-    int fd;
-    char cachePathTmp[PATH_MAX + 24];
-    int res;
+    //store_s3_save_tile_to_cache(request.tile, request.tile_size, cachePath, "store_s3_tile_stat");
 
-    snprintf(cachePathTmp, PATH_MAX + 24, "%s.%lu", cachePath, pthread_self());
-
-    if (mkdirp(cachePathTmp)) {
-         log_message(STORE_LOGLVL_WARNING, "store_s3_tile_stat: error creating cache directory structure for meta tile: %s", cachePath);
-         free(request.tile);
-         return;
-    }
-
-    fd = open(cachePathTmp, O_WRONLY | O_TRUNC | O_CREAT, 0666);
-    if (fd < 0) {
-        log_message(STORE_LOGLVL_WARNING, "store_s3_tile_stat: error creating metatile %s in cache: %s\n", cachePathTmp, strerror(errno));
-        free(request.tile);
-        return;
-    }
-
-    res = write(fd, request.tile, request.tile_size);
-    if (res != request.tile_size) {
-        log_message(STORE_LOGLVL_WARNING, "store_s3_tile_stat: error writing metatile %s in cache: %s\n", cachePathTmp, strerror(errno));
-        close(fd);
-        free(request.tile);
-        return;
-    }
-    close(fd);
     free(request.tile);
 
-    rename(cachePathTmp, cachePath);
-
-    log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: save metatile %s to cache", cachePath);
-
-    /* TODO
-       * inform cleaner to check cache size
-       * set metatile stat in cache according to S3 if needed 
-    */
+    /* TODO: set metatile stat in cache according to S3 if needed */
 }
 
 /*****************************************************************************/
@@ -386,7 +521,7 @@ static struct stat_info store_s3_tile_stat(struct storage_backend *store, const 
     tile_stat.atime = 0;
     tile_stat.ctime = 0;
 
-    char* cachePath = ((struct store_s3_ctx*)store->storage_ctx)->cachePath;
+    const char* cachePath = ((struct store_s3_ctx*)store->storage_ctx)->cachePath;
 
     if(strlen(cachePath) > 0 ) {
         store_s3_tile_stat_with_cache(store, xmlconfig, options, x, y, z, &tile_stat);
