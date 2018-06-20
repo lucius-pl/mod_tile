@@ -12,6 +12,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#include <time.h>
 
 #ifdef HAVE_LIBS3
 #include <libs3.h>
@@ -167,7 +171,7 @@ static struct s3_tile_request store_s3_get_tile_from_s3(S3BucketContext* ctx, co
         return request;
     }
 
-    log_message(STORE_LOGLVL_DEBUG, "%s: got metatile %s from S3", source, path);
+    log_message(STORE_LOGLVL_DEBUG, "%s: got metatile from S3: %s", source, path);
 
     return request;
 }
@@ -418,6 +422,19 @@ static int store_s3_tile_read(struct storage_backend *store, const char *xmlconf
 
 /*****************************************************************************/
 
+static key_t createSemaphoreKey(const char* cachePath) {
+  const char* c = cachePath;
+  long sum = 0;
+
+  while(*c) {
+    sum += *c++;
+  }
+
+  return sum;
+}
+
+/*****************************************************************************/
+
 static void store_s3_tile_stat_with_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, struct stat_info *tile_stat) {
 
     char cachePath[PATH_MAX];
@@ -434,9 +451,58 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
         tile_stat->atime = st_stat.st_atime;
         tile_stat->ctime = st_stat.st_ctime;
 
-        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: successfully read properties of metatile from cache %s", cachePath);
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #1 successfully read properties of metatile from cache %s", cachePath);
 
         return;
+    }
+
+    /* create samaphore to get matatile from S3 only be one process */
+
+    key_t key = createSemaphoreKey(cachePath);
+    long semId = semget(key, 1, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
+    if(semId == -1) {
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: failed to create semaphore for key=%d: %s", key, strerror(errno));
+        semId = semget(key, 1, S_IRUSR);
+        if(semId == -1) {
+          log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: failed to get semaphore for key=%d: %s", key, strerror(errno));
+          return;
+        }
+    } else {
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: semaphore id=%d created for key=%d", semId, key);
+        if(semctl(semId, 0, SETVAL, 1) == -1) {
+            log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: failed to set initial value of semaphore id=%d: %s", semId, strerror(errno));
+            return;
+        }
+    }
+
+    struct sembuf sops;
+    sops.sem_num = 0;
+    sops.sem_op = -1;
+    sops.sem_flg = SEM_UNDO;
+
+    struct timespec tp;
+    clock_gettime(CLOCK_REALTIME, &tp);
+    tp.tv_sec = tp.tv_sec + TIMEOUT/1000;
+
+    int r = semtimedop(semId, &sops, 1, &tp);
+    if(r == -1) {
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: failed to up semaphore id=%d: %s", semId, strerror(errno));
+        if(errno == EIDRM) {
+            /* metatile should be in cache now */
+            if(! stat(cachePath, &st_stat)) {
+                tile_stat->size = st_stat.st_size;
+                tile_stat->mtime = st_stat.st_mtime;
+                tile_stat->atime = st_stat.st_atime;
+                tile_stat->ctime = st_stat.st_ctime;
+                log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #2 successfully read properties of metatile from cache %s", cachePath);
+            }
+            return;
+        } else {
+            if(semctl(semId, 0, IPC_RMID) == -1) {
+                log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #1 failed to remove semaphore id=%d: %s", semId, strerror(errno));
+                return;
+            }
+        }
     }
 
     /* get metatile file from S3 */
@@ -456,11 +522,21 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
 
     /* save metatile file to cache */
 
-    //store_s3_save_tile_to_cache(request.tile, request.tile_size, cachePath, "store_s3_tile_stat");
+    store_s3_save_tile_to_cache(request.tile, request.tile_size, cachePath, "store_s3_tile_stat");
+
+    /* TODO: set metatile stat in cache according to S3 if needed */
 
     free(request.tile);
 
-    /* TODO: set metatile stat in cache according to S3 if needed */
+
+    /* remove semaphore to inform other processes that metatile is in cache now */
+
+    if(semctl(semId, 0, IPC_RMID) == -1) {
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #2 failed to remove semaphore id=%d: %s", semId, strerror(errno));
+        return;
+    } else {
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: semaphore id=%d removed", semId);
+    }
 }
 
 /*****************************************************************************/
