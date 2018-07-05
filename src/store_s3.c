@@ -179,34 +179,32 @@ static struct s3_tile_request store_s3_get_tile_from_s3(S3BucketContext* ctx, co
 /*****************************************************************************/
 
 static void store_s3_save_tile_to_cache(char* metatile, size_t metatile_size, char* cachePath, const char* source) {
-    char cachePathTmp[PATH_MAX + 24];
 
-    snprintf(cachePathTmp, PATH_MAX + 24, "%s.%lu", cachePath, pthread_self());
-
-    if (mkdirp(cachePathTmp)) {
-         log_message(STORE_LOGLVL_WARNING, "%s: error creating cache directory structure for meta tile: %s", source, cachePath);
+    if (mkdirp(cachePath)) {
+         log_message(STORE_LOGLVL_ERR, "%s: error creating cache directory structure for meta tile: %s", source, cachePath);
          return;
     }
 
-    int fd = open(cachePathTmp, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    int fd = open(cachePath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
     if (fd < 0) {
-        log_message(STORE_LOGLVL_WARNING, "%s: error creating metatile %s in cache: %s", source, cachePathTmp, strerror(errno));
+        log_message(STORE_LOGLVL_ERR, "%s: error creating metatile %s in cache: %s", source, cachePath, strerror(errno));
+        return;
+    }
+
+    if(flock(fd, LOCK_EX) == -1) {
+        log_message(STORE_LOGLVL_ERR, "%s: error apply lock on %s in cache: %s", source, cachePath, strerror(errno));
         return;
     }
 
     int res = write(fd, metatile, metatile_size);
     if (res != metatile_size) {
-        log_message(STORE_LOGLVL_WARNING, "%s: error writing metatile %s in cache: %s", source, cachePathTmp, strerror(errno));
+        log_message(STORE_LOGLVL_WARNING, "%s: error writing metatile %s in cache: %s", source, cachePath, strerror(errno));
         close(fd);
         return;
     }
     close(fd);
 
-    rename(cachePathTmp, cachePath);
-
     log_message(STORE_LOGLVL_DEBUG, "%s: save metatile %s to cache", source, cachePath);
-
-    /* TODO: inform cleaner to check cache size */
 }
 
 /*****************************************************************************/
