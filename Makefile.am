@@ -18,6 +18,7 @@ man_MANS = docs/renderd.8 docs/render_expired.1 docs/render_list.1 docs/render_o
 
 renderddir = $(sysconfdir)
 renderd_SOURCES = src/daemon.c src/daemon_compat.c src/gen_tile.cpp src/sys_utils.c src/request_queue.c src/cache_expire.c src/metatile.cpp src/parameterize_style.cpp src/protocol_helper.c $(STORE_SOURCES)
+renderd_CFLAGS = -DRENDERD
 renderd_CXXFLAGS = $(MAPNIK_CFLAGS)
 renderd_LDADD = $(PTHREAD_CFLAGS) $(MAPNIK_LDFLAGS) $(STORE_LDFLAGS) -liniparser
 if !SYSTEM_LIBINIPARSER

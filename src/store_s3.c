@@ -454,6 +454,8 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
         return;
     }
 
+    #ifndef RENDERD
+
     /* create samaphore to get matatile from S3 only be one process */
 
     key_t key = createSemaphoreKey(cachePath);
@@ -503,6 +505,8 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
         }
     }
 
+    #endif
+
     /* get metatile file from S3 */
 
     char s3Path[PATH_MAX];
@@ -527,6 +531,8 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     free(request.tile);
 
 
+    #ifndef RENDERD
+
     /* remove semaphore to inform other processes that metatile is in cache now */
 
     if(semctl(semId, 0, IPC_RMID) == -1) {
@@ -535,6 +541,8 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     } else {
         log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: semaphore id=%d removed", semId);
     }
+
+    #endif
 }
 
 /*****************************************************************************/
