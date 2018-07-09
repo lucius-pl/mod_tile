@@ -16,6 +16,7 @@
 #include <sys/ipc.h>
 #include <sys/sem.h>
 #include <time.h>
+#include <pwd.h>
 
 #ifdef HAVE_LIBS3
 #include <libs3.h>
@@ -178,7 +179,7 @@ static struct s3_tile_request store_s3_get_tile_from_s3(S3BucketContext* ctx, co
 
 /*****************************************************************************/
 
-static void store_s3_save_tile_to_cache(char* metatile, size_t metatile_size, char* cachePath, const char* source) {
+static void store_s3_save_tile_to_cache(const char* metatile, size_t metatile_size, char* cachePath, const char* source) {
 
     if (mkdirp(cachePath)) {
          log_message(STORE_LOGLVL_ERR, "%s: error creating cache directory structure for meta tile: %s", source, cachePath);
@@ -457,6 +458,10 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     #ifndef RENDERD
 
     /* create samaphore to get matatile from S3 only be one process */
+    /* TODO: remove semaphore if renderd is off and a metatile is needed by one process only, proposals are as follows: 
+       1. don't create semaphore if renderd is off,
+       2. during startup of renderd all semaphores owned by renderd are removed,
+       3. others?  */
 
     key_t key = createSemaphoreKey(cachePath);
     long semId = semget(key, 1, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
@@ -481,8 +486,8 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     sops.sem_flg = SEM_UNDO;
 
     struct timespec tp;
-    clock_gettime(CLOCK_REALTIME, &tp);
-    tp.tv_sec = tp.tv_sec + TIMEOUT/1000;
+    tp.tv_sec = TIMEOUT / 1000;
+    tp.tv_nsec = 0;
 
     int r = semtimedop(semId, &sops, 1, &tp);
     if(r == -1) {
@@ -496,13 +501,18 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
                 tile_stat->ctime = st_stat.st_ctime;
                 log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #2 successfully read properties of metatile from cache %s", cachePath);
             }
-            return;
         } else {
-            if(semctl(semId, 0, IPC_RMID) == -1) {
-                log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #1 failed to remove semaphore id=%d: %s", semId, strerror(errno));
-                return;
-            }
+          if (errno == EAGAIN) {
+              log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: timeout for semaphore id=%d: %s", semId, strerror(errno));
+          }
+
+          if(semctl(semId, 0, IPC_RMID) == -1) {
+              log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: #1 failed to remove semaphore id=%d: %s", semId, strerror(errno));
+          } else {
+             log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: semaphore id=%d removed", semId);
+          }
         }
+        return;
     }
 
     #endif
@@ -513,6 +523,40 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     store_s3_xyz_to_storagekey(store, xmlconfig, options, x, y, z, s3Path, PATH_MAX);
     struct s3_tile_request request = store_s3_get_tile_from_s3(ctx->ctx, s3Path, "store_s3_tile_stat");
     if(request.tile == NULL) {
+
+        #ifndef RENDERD
+
+        /* metatile doesn't exists on S3, need to render it, 
+           grant permission for renderd to remove the semaphore after renderd wrote a metafile to S3 cache. */
+
+        struct semid_ds s_ds;
+
+        if(semctl(semId, 0,  IPC_STAT, &s_ds) == -1) {
+            log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: failed to get permissions of semaphore id=%d: %s", semId, strerror(errno));
+            return;
+        }
+
+        /* TODO: need to get a UID of RENDERD process without hard coding, proposals are as follows:
+           1. get from UNIX socket,
+           2. pass as a configuration parameter,
+           3. find renderd process,
+           4. others? */
+        #define RENDERD_USER_NAME "osm"
+
+        uid_t old_uid = s_ds.sem_perm.uid;
+        struct passwd* pwd;
+        pwd = getpwnam(RENDERD_USER_NAME);
+        s_ds.sem_perm.uid = pwd->pw_uid;
+
+        if(semctl(semId, 0,  IPC_SET, &s_ds) == -1) {
+            log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: failed to set permissions of semaphore id=%d: %s", semId, strerror(errno));
+            return;
+        } else {
+            log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: changed owner of semaphore id=%d: from uid=%d to uid=%d", semId, old_uid, s_ds.sem_perm.uid);
+        }
+
+        #endif
+
         return;
     }
 
@@ -625,7 +669,94 @@ static char* store_s3_tile_storage_id(struct storage_backend *store, const char 
 
 /*****************************************************************************/
 
-static int store_s3_metatile_write(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, const char *buf, int sz)
+static int store_s3_metatile_write_with_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, const char *buf, int sz)
+{
+    struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
+    char *path = malloc(PATH_MAX);
+    char cachePath[PATH_MAX];
+
+    /* save metatile file to S3 cache */
+
+    xyzo_to_meta(cachePath, PATH_MAX, ctx->cachePath, xmlconfig, options, x, y, z);
+
+    store_s3_save_tile_to_cache(buf, sz, cachePath, "store_s3_metatile_write");
+
+    /* remove semaphore to inform apache processes that metatile is in S3 cache now */
+    /* TODO: determine an impact on other tools like: render_list, render_expired, etc. */
+
+    #ifdef RENDERD
+
+    key_t key = createSemaphoreKey(cachePath);
+    long semId = semget(key, 1, S_IRUSR);
+    if(semId == -1) {
+        log_message(STORE_LOGLVL_ERR, "store_s3_metatile_write: failed to get semaphore for key=%d: %s", key, strerror(errno));
+    } else {
+        if(semctl(semId, 0, IPC_RMID) == -1) {
+            log_message(STORE_LOGLVL_ERR, "store_s3_metatile_write: failed to remove semaphore id=%d: %s", semId, strerror(errno));
+        } else {
+            log_message(STORE_LOGLVL_DEBUG, "store_s3_metatile_write: semaphore id=%d removed", semId);
+        }
+    }
+
+    #endif
+
+    /* save metatile file to S3 */
+
+    store_s3_xyz_to_storagekey(store, xmlconfig, options, x, y, z, path, PATH_MAX);
+    log_message(STORE_LOGLVL_DEBUG, "store_s3_metatile_write: storing object %s, size %ld", path, sz);
+
+    struct S3PutObjectHandler putObjectHandler;
+    putObjectHandler.responseHandler.propertiesCallback = &store_s3_properties_callback;
+    putObjectHandler.responseHandler.completeCallback = &store_s3_complete_callback;
+    putObjectHandler.putObjectDataCallback = &store_s3_put_object_data_callback;
+
+    struct s3_tile_request request;
+    request.path = path;
+    request.tile = (char*) buf;
+    request.tile_size = sz;
+    request.cur_offset = 0;
+    request.tile_expired = 0;
+    request.result = S3StatusOK;
+    request.error_details = NULL;
+
+    S3PutProperties props;
+    props.contentType = "application/octet-stream";
+    props.cacheControl = NULL;
+    props.cannedAcl = S3CannedAclPrivate; // results in no ACL header in POST
+    props.contentDispositionFilename = NULL;
+    props.contentEncoding = NULL;
+    props.expires = -1;
+    props.md5 = NULL;
+    props.metaData = NULL;
+    props.metaDataCount = 0;
+    props.useServerSideEncryption = 0;
+
+    S3_put_object(ctx->ctx, path, sz, &props, NULL, TIMEOUT, &putObjectHandler, &request);
+    free(path);
+
+    if (request.result != S3StatusOK) {
+        const char *msg = "";
+        const char *msg2 = "";
+        if (request.error_details) {
+            if (request.error_details->message) {
+                msg = request.error_details->message;
+            }
+            if (request.error_details->furtherDetails) {
+                msg2 = request.error_details->furtherDetails;
+            }
+        }
+        log_message(STORE_LOGLVL_ERR, "store_s3_metatile_write: failed to write object: %d(%s)/%s%s", request.result, S3_get_status_name(request.result), msg, msg2);
+        return -1;
+    }
+
+    log_message(STORE_LOGLVL_DEBUG, "store_s3_metatile_write: Wrote object of size %i", sz);
+
+    return sz;
+}
+
+/*****************************************************************************/
+
+static int store_s3_metatile_write_without_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, const char *buf, int sz)
 {
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
     char *path = malloc(PATH_MAX);
@@ -679,6 +810,20 @@ static int store_s3_metatile_write(struct storage_backend *store, const char *xm
     log_message(STORE_LOGLVL_DEBUG, "store_s3_metatile_write: Wrote object of size %i", sz);
 
     return sz;
+}
+
+
+/*****************************************************************************/
+
+static int store_s3_metatile_write(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, const char *buf, int sz)
+{
+    const char* cachePath = ((struct store_s3_ctx*)store->storage_ctx)->cachePath;
+
+    if(strlen(cachePath) > 0 ) {
+        return store_s3_metatile_write_with_cache(store, xmlconfig, options, x, y, z, buf, sz);
+    } else {
+        return store_s3_metatile_write_without_cache(store, xmlconfig, options, x, y, z, buf, sz);
+    }
 }
 
 /*****************************************************************************/
