@@ -17,6 +17,7 @@
 #include <sys/sem.h>
 #include <time.h>
 #include <pwd.h>
+#include <sys/file.h>
 
 #ifdef HAVE_LIBS3
 #include <libs3.h>
