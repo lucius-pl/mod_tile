@@ -10,7 +10,16 @@ extern "C"
 
 #include "store.h"
 
+typedef enum {
+    CREATE_DIR = 1,
+    CREATE_FILE = 2,
+    READ = 3,
+    UPDATE = 4,
+    DELETE = 5
+} MsgQueType;
+
 struct storage_backend* init_storage_s3(const char *connection_string);
+int store_s3_cache_send_msg(char*, MsgQueType);
 
 #ifdef __cplusplus
 }

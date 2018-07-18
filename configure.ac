@@ -61,6 +61,7 @@ AC_ARG_WITH([libs3],
     if test "$libs3_dir" != "no"; then
       if test "$libs3_dir" != "yes"; then
         AC_MSG_CHECKING([for libs3])
+
         if test -f "$libs3_dir/include/libs3.h"; then
           AC_DEFINE([HAVE_LIBS3], [1], [Have found libs3])
           LIBS3_LDFLAGS="-L$libs3_dir/lib -ls3"
@@ -93,6 +94,9 @@ AC_ARG_WITH([libs3],
         ],
         [])
     ])
+
+AM_CONDITIONAL([HAVE_LIBS3],[test -n LIBS3_LDFLAGS])
+AM_COND_IF([HAVE_LIBS3],[LIBDSAA_CHECK_CONFIG])
 
 AC_CHECK_FUNCS([bzero gethostbyname gettimeofday inet_ntoa memset mkdir pow select socket strchr strdup strerror strrchr strstr strtol strtoul utime],[],[AC_MSG_ERROR([One of the required functions was not found])])
 AC_CHECK_FUNCS([daemon getloadavg],[],[])
