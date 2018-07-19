@@ -10,6 +10,11 @@ extern "C"
 
 #include "store.h"
 
+struct storage_backend* init_storage_s3(const char *connection_string);
+
+
+#ifdef HAVE_LIBDSAA
+
 typedef enum {
     CREATE_DIR = 1,
     CREATE_FILE = 2,
@@ -18,8 +23,9 @@ typedef enum {
     DELETE = 5
 } MsgQueType;
 
-struct storage_backend* init_storage_s3(const char *connection_string);
 int store_s3_cache_send_msg(char*, MsgQueType);
+
+#endif
 
 #ifdef __cplusplus
 }

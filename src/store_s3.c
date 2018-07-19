@@ -38,14 +38,13 @@
 #include "protocol.h"
 
 
-
 #ifdef HAVE_LIBS3
 
 #define DEFAULT_CACHE_SIZE "100MB"
 #define MSG request.error_details && request.error_details->message ? request.error_details->message : ""
-#define MESSAGE_QUEUE_KEY 1975
 
 typedef struct s3_storage_cache {
+    #ifdef HAVE_LIBDSAA
     struct list fileList;
     struct list dirList;
     long int fileSize;
@@ -53,20 +52,11 @@ typedef struct s3_storage_cache {
     int fileCount;
     int dirCount;
     long int size;
+    #endif
     char *path;
     char *sizeUnit;
 } S3Cache;
 
-struct list_data {
-    char path[PATH_MAX];
-    time_t atime;
-    off_t size;
-};
-
-struct msg_que_data {
-   long mtype;
-   char mtext[PATH_MAX];
-};
 
 static pthread_mutex_t qLock;
 static int store_s3_initialized = 0;
@@ -92,16 +82,27 @@ struct store_s3_ctx {
 
 /*****************************************************************************/
 
-#if defined RENDERD && defined HAVE_LIBDSAA
+#ifdef HAVE_LIBDSAA
+
+#define MESSAGE_QUEUE_KEY 1975
+
+struct msg_que_data {
+   long mtype;
+   char mtext[PATH_MAX];
+};
+
+#ifdef RENDERD
 
 static pthread_mutex_t cache_cleaner_lock;
 static pthread_t cache_cleaner_thread = 0LU;
 
 typedef enum {SORT, LAST} list_add_mode;
 
-#define INOTIFY_BUF_LEN 10 * sizeof(struct inotify_event) + NAME_MAX + 1
-
-
+struct list_data {
+    char path[PATH_MAX];
+    time_t atime;
+    off_t size;
+};
 
 /*****************************************************************************/
 
@@ -444,7 +445,9 @@ static void* exec_cache_cleaner_thread(void* v) {
     listFun.release = &s3_cache_list_release_item; 
     listFun.update = &s3_cache_list_update_item; 
 
+    #ifdef DEBUG
     list_debug(1);
+    #endif
     list_init(&s3Cache.fileList, &listFun);
     list_init(&s3Cache.dirList,  &listFun);
 
@@ -465,6 +468,7 @@ static void* exec_cache_cleaner_thread(void* v) {
     return 0;
 }
 
+#endif
 #endif
 
 /*****************************************************************************/
@@ -584,6 +588,8 @@ static struct s3_tile_request store_s3_get_tile_from_s3(S3BucketContext* ctx, co
 
 /*****************************************************************************/
 
+#ifdef HAVE_LIBDSAA
+
 extern int store_s3_cache_send_msg(char* path, MsgQueType msqtype) {
     int msqid;
     struct msg_que_data msqdata;
@@ -607,10 +613,11 @@ extern int store_s3_cache_send_msg(char* path, MsgQueType msqtype) {
     return 0;
 }
 
+#endif
+
 /*****************************************************************************/
 
 static int store_s3_save_tile_to_cache(const char* metatile, size_t metatile_size, char* cachePath, const char* source) {
-    MsgQueType msqtype = CREATE_FILE;
 
     mode_t pumask = umask(0);
     log_message(STORE_LOGLVL_DEBUG, "store_s3_save_tile_to_cache: reset umask to 0, previous umask is (%04o)", pumask);
@@ -641,9 +648,15 @@ static int store_s3_save_tile_to_cache(const char* metatile, size_t metatile_siz
 
     log_message(STORE_LOGLVL_DEBUG, "%s: save metatile %s to S3 cache", source, cachePath);
 
+
+    #ifdef HAVE_LIBDSAA
+
     /* inform cleaner about a new file in S3 cache */
 
+    MsgQueType msqtype = CREATE_FILE;
     store_s3_cache_send_msg(cachePath, msqtype);
+
+    #endif
 
     return 0;
 }
@@ -657,7 +670,6 @@ static int store_s3_tile_read_with_cache(struct storage_backend *store, const ch
     struct s3_tile_request request;
     char *metatile;
     size_t metatile_size;
-    MsgQueType msqtype = READ;
 
     /* check if metatile file exists in cache */
 
@@ -716,7 +728,14 @@ static int store_s3_tile_read_with_cache(struct storage_backend *store, const ch
         close(fd);
         log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_read: retrieved metatile from cache: %s", path);
 
+        #ifdef HAVE_LIBDSAA
+
+        /* inform cleaner about reading a file from S3 cache */
+
+        MsgQueType msqtype = READ;
         store_s3_cache_send_msg(path, msqtype);
+
+        #endif
     }
 
     /* extract tile from metatile */
