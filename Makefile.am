@@ -36,6 +36,8 @@ render_expired_SOURCES = src/render_expired.c src/protocol_helper.c src/render_s
 render_expired_LDADD = $(PTHREAD_CFLAGS) $(STORE_LDFLAGS)
 render_old_SOURCES = src/store_file_utils.c src/render_old.c src/sys_utils.c src/protocol_helper.c src/render_submit_queue.c
 render_old_LDADD = $(PTHREAD_CFLAGS)
+#force recompilation of store_file_utils.o to use a version for render_old
+render_old_CFLAGS =
 #convert_meta_SOURCES = src/dir_utils.c src/store.c src/convert_meta.c
 gen_tile_test_SOURCES = src/gen_tile_test.cpp src/metatile.cpp src/request_queue.c src/protocol_helper.c src/daemon.c src/daemon_compat.c src/gen_tile.cpp src/sys_utils.c src/cache_expire.c src/parameterize_style.cpp $(STORE_SOURCES)
 gen_tile_test_CFLAGS = -DMAIN_ALREADY_DEFINED $(PTHREAD_CFLAGS) $(STORE_CFLAGS)
