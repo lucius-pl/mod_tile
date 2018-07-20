@@ -94,7 +94,7 @@ struct msg_que_data {
 #ifdef RENDERD
 
 static pthread_mutex_t cache_cleaner_lock;
-static pthread_t cache_cleaner_thread = 0LU;
+static pthread_t cache_cleaner_thread = 0;
 
 typedef enum {SORT, LAST} list_add_mode;
 
@@ -169,6 +169,7 @@ int s3_cache_add_dir(char* path, S3Cache *s3Cache) {
 
     strncpy(ld->path, path, PATH_MAX);
     ld->size = fs.st_size;
+    ld->atime = ((struct timespec)fs.st_atim).tv_sec;
 
     s3Cache->dirSize +=  fs.st_size;
     s3Cache->dirCount++;
@@ -1639,11 +1640,11 @@ struct storage_backend* init_storage_s3(const char *connection_string)
 
         #if defined RENDERD && defined HAVE_LIBDSAA
         pthread_mutex_lock(&cache_cleaner_lock);
-        if (cache_cleaner_thread == 0LU) {
+        if (cache_cleaner_thread == 0) {
             if(pthread_create(&cache_cleaner_thread, NULL, exec_cache_cleaner_thread, &ctx->s3Cache) == 0) {
-                log_message(STORE_LOGLVL_DEBUG, "init_storage_s3: Started cache cleaner thread id=%lu", cache_cleaner_thread);
+                log_message(STORE_LOGLVL_INFO, "init_storage_s3: Started S3 cache cleaner thread id=%lu", cache_cleaner_thread);
             } else {
-                log_message(STORE_LOGLVL_ERR, "init_storage_s3: Failed to create cache cleaner thread: %s", strerror(errno));
+                log_message(STORE_LOGLVL_ERR, "init_storage_s3: Failed to create S3 cache cleaner thread: %s", strerror(errno));
             }
         }
         pthread_mutex_unlock(&cache_cleaner_lock);
