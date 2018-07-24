@@ -7,12 +7,15 @@ extern "C" {
 
 #include <stdlib.h>
 #include <sys/types.h>
+#include <syslog.h>
 #include "render_config.h"
 
-#define STORE_LOGLVL_DEBUG 0
-#define STORE_LOGLVL_INFO 1
-#define STORE_LOGLVL_WARNING 2
-#define STORE_LOGLVL_ERR 3
+#define STORE_LOGLVL_DEBUG    LOG_DEBUG
+#define STORE_LOGLVL_INFO     LOG_INFO
+#define STORE_LOGLVL_WARNING  LOG_WARNING
+#define STORE_LOGLVL_ERR      LOG_ERR
+
+#define STORE_LOGLVL_DEFAULT "warn"
 
     struct stat_info {
         off_t     size;    /* total size, in bytes */
@@ -35,9 +38,12 @@ extern "C" {
     };
 
     void log_message(int log_lvl, const char *format, ...);
-    
-    struct storage_backend * init_storage_backend(const char * options);
-        
+
+    struct storage_backend * init_storage_backend(const char * options, const short store_log_error);
+
+    short get_store_log_level_value(const char* name);
+    char* get_store_log_level_name(short value);
+
 #ifdef __cplusplus
 }
 #endif

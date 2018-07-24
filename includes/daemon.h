@@ -12,6 +12,7 @@ extern "C" {
 #include <limits.h> /* for PATH_MAX */
 #include "gen_tile.h"
 #include "protocol.h"
+#include "store.h"
 
 #define INILINE_MAX 256
 #define MAX_SLAVES 5
@@ -26,6 +27,7 @@ typedef struct {
     char *mapnik_font_dir;
     int mapnik_font_dir_recurse;
     char * stats_filename;
+    char* store_log_level;
 } renderd_config;
 
 typedef struct {
@@ -41,6 +43,7 @@ typedef struct {
     int min_zoom;
     int max_zoom;
     int num_threads;
+    short store_log_level;
 } xmlconfigitem;
 
 

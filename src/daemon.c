@@ -25,6 +25,7 @@
 #include "protocol.h"
 #include "protocol_helper.h"
 #include "request_queue.h"
+#include "store.h"
 
 #define PIDFILE "/var/run/renderd/renderd.pid"
 
@@ -783,6 +784,15 @@ int main(int argc, char **argv)
             }
             strcpy(maps[iconf].tile_dir, ini_tiledir);
 
+            sprintf(buffer, "%s:storeloglevel", name);
+            char *ini_storeloglevel = iniparser_getstring(ini, buffer, config.store_log_level);
+            short val_storeloglevel = get_store_log_level_value(ini_storeloglevel);
+            if(val_storeloglevel == -1) {
+                fprintf(stderr, "StoreLoglevel is incorrect: %s. Should be one of: debug, info, warn, error.\n", ini_storeloglevel);
+                exit(7);
+            }
+            maps[iconf].store_log_level = val_storeloglevel;
+
             sprintf(buffer, "%s:maxzoom", name);
             char *ini_maxzoom = iniparser_getstring(ini, buffer, "18");
             maps[iconf].max_zoom = atoi(ini_maxzoom);
@@ -841,6 +851,9 @@ int main(int argc, char **argv)
             sprintf(buffer, "%s:tile_dir", name);
             config_slaves[render_sec].tile_dir = iniparser_getstring(ini,
                     buffer, (char *) HASH_PATH);
+            sprintf(buffer, "%s:store_log_level", name);
+            config_slaves[render_sec].store_log_level = iniparser_getstring(ini,
+                    buffer, (char *) STORE_LOGLVL_DEFAULT);
             sprintf(buffer, "%s:stats_file", name);
             config_slaves[render_sec].stats_filename = iniparser_getstring(ini,
                     buffer, NULL);
@@ -851,6 +864,7 @@ int main(int argc, char **argv)
                 config.ipport = config_slaves[render_sec].ipport;
                 config.num_threads = config_slaves[render_sec].num_threads;
                 config.tile_dir = config_slaves[render_sec].tile_dir;
+                config.store_log_level = config_slaves[render_sec].store_log_level;
                 config.stats_filename
                         = config_slaves[render_sec].stats_filename;
                 config.mapnik_plugins_dir = iniparser_getstring(ini,
