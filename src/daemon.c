@@ -26,7 +26,6 @@
 #include "protocol.h"
 #include "protocol_helper.h"
 #include "request_queue.h"
-#include "store.h"
 
 #define PIDFILE "/var/run/renderd/renderd.pid"
 

@@ -12,7 +12,6 @@ extern "C" {
 #include <limits.h> /* for PATH_MAX */
 #include "gen_tile.h"
 #include "protocol.h"
-#include "store.h"
 
 #define INILINE_MAX 256
 #define MAX_SLAVES 5
