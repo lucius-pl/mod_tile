@@ -15,8 +15,6 @@ extern "C" {
 #define STORE_LOGLVL_WARNING  LOG_WARNING
 #define STORE_LOGLVL_ERR      LOG_ERR
 
-#define STORE_LOGLVL_DEFAULT "warn"
-
     struct stat_info {
         off_t     size;    /* total size, in bytes */
         time_t    atime;   /* time of last access */
@@ -39,10 +37,7 @@ extern "C" {
 
     void log_message(int log_lvl, const char *format, ...);
 
-    struct storage_backend * init_storage_backend(const char * options, const short store_log_error);
-
-    short get_store_log_level_value(const char* name);
-    char* get_store_log_level_name(short value);
+    struct storage_backend * init_storage_backend(const char * options);
 
 #ifdef __cplusplus
 }

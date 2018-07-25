@@ -77,6 +77,8 @@ char *mutexfilename;
 int layerCount = 0;
 int global_max_zoom = 0;
 
+server_rec* ap_server;
+
 struct storage_backends {
     struct storage_backend ** stores;
     int noBackends;
@@ -306,33 +308,6 @@ static apr_status_t cleanup_storage_backend(void * data) {
     return APR_SUCCESS;
 }
 
-static short get_store_log_level(int ap_log_level) {
-    switch(ap_log_level) {
-        case APLOG_EMERG:
-        case APLOG_ALERT:
-        case APLOG_CRIT:
-        case APLOG_ERR:
-            return STORE_LOGLVL_ERR;
-        case APLOG_WARNING:
-            return STORE_LOGLVL_WARNING;
-        case APLOG_NOTICE:
-        case APLOG_INFO:
-            return STORE_LOGLVL_INFO;
-        case APLOG_DEBUG:
-        case APLOG_TRACE1:
-        case APLOG_TRACE2:
-        case APLOG_TRACE3:
-        case APLOG_TRACE4:
-        case APLOG_TRACE5:
-        case APLOG_TRACE6:
-        case APLOG_TRACE7:
-        case APLOG_TRACE8:
-            return STORE_LOGLVL_DEBUG;
-        default:
-            return get_store_log_level_value(STORE_LOGLVL_DEFAULT);
-  }
-}
-
 static struct storage_backend * get_storage_backend(request_rec *r, int tile_layer) {
     struct storage_backends * stores = NULL;
     ap_conf_vector_t *sconf = r->server->module_config;
@@ -380,10 +355,10 @@ static struct storage_backend * get_storage_backend(request_rec *r, int tile_lay
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "get_storage_backend: No storage backend in current lifecycle %pp in thread %li for current tile layer %i",
                 lifecycle_pool, os_thread, tile_layer);
 
-        int ap_log_level = ap_get_server_module_loglevel(r->server, tile_module.module_index);
-        int store_log_level = get_store_log_level(ap_log_level);
+        /* needed by log_message in store.c */
+        ap_server = r->server;
 
-        stores->stores[tile_layer] = init_storage_backend(tile_config->store, store_log_level);
+        stores->stores[tile_layer] = init_storage_backend(tile_config->store);
 
     } else {
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "get_storage_backend: Storage backend found in current lifecycle %pp for current tile layer %i in thread %li",

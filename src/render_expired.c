@@ -277,7 +277,7 @@ int main(int argc, char **argv)
         doRender = 1;
     }
 
-    store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+    store = init_storage_backend(tile_dir);
     if (store == NULL) {
         fprintf(stderr, "failed to initialise storage backend %s\n", tile_dir);
         return 1;

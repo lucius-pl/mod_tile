@@ -622,7 +622,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
     SECTION("storage/initialise", "should return 1") {
         struct storage_backend * store = NULL;
 
-        store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+        store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
         store->close_storage(store);
         
@@ -632,7 +632,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
         struct storage_backend * store = NULL;
         struct stat_info sinfo;
 
-        store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+        store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
         
         sinfo = store->tile_stat(store, "default", "", 0, 0, 0);
@@ -648,7 +648,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
         int compressed;
         char * err_msg = (char *)malloc(10000);
 
-        store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+        store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
         
         size = store->tile_read(store, "default", "", 0, 0, 0, buf, 10000, &compressed, err_msg);
@@ -663,7 +663,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
     SECTION("storage/write/full metatile", "should complete") {
         struct storage_backend * store = NULL;
 
-        store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+        store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
         
         metaTile tiles("default", "", 1024, 1024, 10);
@@ -684,7 +684,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
         
         time_t before_write, after_write;
 
-        store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+        store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
         
         metaTile tiles("default", "", 1024 + METATILE, 1024, 10);
@@ -725,7 +725,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
 
         time_t before_write, after_write;
 
-        store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+        store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
         
         metaTile tiles("default", "", 1024 + METATILE, 1024, 10);
@@ -769,7 +769,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
 
         time_t before_write, after_write;
 
-        store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+        store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
         
         metaTile tiles("default", "",  1024 + 2*METATILE, 1024, 10);
@@ -811,7 +811,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
         buf = (char *)malloc(8196);
         buf_tmp = (char *)malloc(8196);
 
-        store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+        store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
         
         metaTile tiles("default", "", 1024 + 3*METATILE, 1024, 10);
@@ -849,7 +849,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
         buf = (char *)malloc(8196);
         buf_tmp = (char *)malloc(8196);
 
-        store = init_storage_backend(tile_dir, STORE_LOGLVL_DEBUG);
+        store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
 
         metaTile tiles("default", "", 1024 + 4*METATILE, 1024, 10);

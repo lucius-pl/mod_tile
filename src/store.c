@@ -10,20 +10,18 @@
 #include <stdarg.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
 #ifdef HAVE_PTHREAD
 #include <pthread.h>
 #endif
-
 #ifdef RENDERD
 #include <syslog.h>
-#else
-#include <time.h>
 #endif
-
+#ifdef APACHE
+#include <httpd.h>
+#include <http_log.h>
+APLOG_USE_MODULE(tile);
+extern server_rec* ap_server;
+#endif
 
 #include "store.h"
 #include "store_file.h"
@@ -34,81 +32,23 @@
 #include "store_null.h"
 
 #define MSG_SIZE 1000
-#define LOG_SIZE MSG_SIZE + 100
-
-static short store_log_level = STORE_LOGLVL_WARNING;
 
 //TODO: Make this function handle different logging backends, depending on if on compiles it from apache or something else
 void log_message(int log_lvl, const char *format, ...) {
-
-    /* skip message above defined log level */
-    if(log_lvl > store_log_level) {
-        return;
-    }
-
-    #ifdef HAVE_PTHREAD
-    pthread_t tid = pthread_self();
-    #endif
     va_list ap;
     char msg[MSG_SIZE];
-    char log[LOG_SIZE];
 
     va_start(ap, format);
     vsnprintf(msg, MSG_SIZE, format, ap);
     va_end(ap);
 
-    #ifndef RENDERD
-        int pid = getpid();
-        time_t t = time(NULL);
-        char* ct = ctime(&t);
-        /* remove \n at the end */
-        *(ct + strlen(ct) - 1) = 0;
-    #endif
-
-    switch (log_lvl) {
-        case STORE_LOGLVL_DEBUG:
-            #ifdef RENDERD
-                #ifdef HAVE_PTHREAD
-                    sprintf(log, "[debug] [%lu]: %s", tid, msg);
-                #else
-                    sprintf(log, "[debug]: %s", msg);
-                #endif
-            #else
-                #ifdef HAVE_PTHREAD
-                    sprintf(log, "[%s] [tile:debug] [%d][%lu]: %s\n", ct, pid, tid, msg);
-                #else
-                    sprintf(log, "[%s] [tile:debug] [%d]: %s\n", ct, pid, msg);
-                #endif
-            #endif
-            break;
-        case STORE_LOGLVL_INFO:
-            #ifdef RENDERD
-                sprintf(log, "[info]: %s", msg);
-            #else
-                sprintf(log, "[%s] [tile:info] [%d]: %s\n", ct, pid, msg);
-            #endif
-            break;
-        case STORE_LOGLVL_WARNING:
-            #ifdef RENDERD
-                sprintf(log, "[WARNING]: %s", msg);
-            #else
-                sprintf(log, "[%s] [tile:warn] [%d]: %s\n", ct, pid, msg);
-            #endif
-            break;
-        case STORE_LOGLVL_ERR:
-            #ifdef RENDERD
-                sprintf(log, "[ERR]: %s", msg);
-            #else
-                sprintf(log, "[%s] [tile:error] [%d]: %s\n", ct, pid, msg);
-            #endif
-            break;
-    }
-
-    #ifdef RENDERD
-      syslog(log_lvl, msg);
+    #if defined RENDERD
+        syslog(log_lvl, msg);
+    #elif defined APACHE
+        ap_log_error(APLOG_MARK, log_lvl, 0, ap_server, msg);
     #else
-      fputs(log, stderr);
-      fflush(stderr);
+        fprintf(stderr, msg);
+        fflush(stderr);
     #endif
 }
 
@@ -118,13 +58,9 @@ void log_message(int log_lvl, const char *format, ...) {
  *
  * In Apache 2.4, we call the init_storage_backend once per thread, and therefore each thread has its own storage context to work with.
  */
-struct storage_backend * init_storage_backend(const char * options, const short store_log_level_) {
+struct storage_backend * init_storage_backend(const char * options) {
     struct stat st;
     struct storage_backend * store = NULL;
-    store_log_level = store_log_level_;
-
-    log_message(STORE_LOGLVL_DEBUG, "init_storage_backend: StoreLogLevel: %s", get_store_log_level_name(store_log_level));
-
 
     //Determine the correct storage backend based on the options string
     if (strlen(options) == 0) {
@@ -174,41 +110,4 @@ struct storage_backend * init_storage_backend(const char * options, const short 
     log_message(STORE_LOGLVL_ERR, "init_storage_backend: No valid storage backend found for options: %s", options);
 
     return store;
-}
-
-/**
- * get store log level value by name
- */
-short get_store_log_level_value(const char* name) {
-
-    if(strcasecmp(name, "debug") == 0) {
-        return STORE_LOGLVL_DEBUG;
-    } else if(strcasecmp(name, "info") == 0) {
-        return STORE_LOGLVL_INFO;
-    } else if(strcasecmp(name, "warn") == 0) {
-        return STORE_LOGLVL_WARNING;
-    } else if(strcasecmp(name, "error") == 0) {
-        return STORE_LOGLVL_ERR;
-    } else {
-       return -1;
-    }
-}
-
-/**
- * get store log level name by value
- */
-char* get_store_log_level_name(short value) {
-
-    switch(value) {
-        case STORE_LOGLVL_DEBUG:
-            return "debug";
-        case STORE_LOGLVL_INFO:
-            return "info";
-        case STORE_LOGLVL_WARNING:
-            return "warn";
-        case STORE_LOGLVL_ERR:
-            return "error";
-        default:
-            return NULL;
-    }
 }

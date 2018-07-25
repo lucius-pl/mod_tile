@@ -344,7 +344,7 @@ void *render_thread(void * arg)
         if (parentxmlconfig[iMaxConfigs].xmlname[0] == 0 || parentxmlconfig[iMaxConfigs].xmlfile[0] == 0) break;
         strcpy(maps[iMaxConfigs].xmlname, parentxmlconfig[iMaxConfigs].xmlname);
         strcpy(maps[iMaxConfigs].xmlfile, parentxmlconfig[iMaxConfigs].xmlfile);
-        maps[iMaxConfigs].store = init_storage_backend(parentxmlconfig[iMaxConfigs].tile_dir, parentxmlconfig[iMaxConfigs].store_log_level);
+        maps[iMaxConfigs].store = init_storage_backend(parentxmlconfig[iMaxConfigs].tile_dir);
         maps[iMaxConfigs].tilesize  = parentxmlconfig[iMaxConfigs].tile_px_size;
         maps[iMaxConfigs].scale  = parentxmlconfig[iMaxConfigs].scale_factor;
         maps[iMaxConfigs].minzoom = parentxmlconfig[iMaxConfigs].min_zoom;
