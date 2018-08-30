@@ -77,6 +77,8 @@ char *mutexfilename;
 int layerCount = 0;
 int global_max_zoom = 0;
 
+server_rec* ap_server;
+
 struct storage_backends {
     struct storage_backend ** stores;
     int noBackends;
@@ -352,7 +354,12 @@ static struct storage_backend * get_storage_backend(request_rec *r, int tile_lay
     if (stores->stores[tile_layer] == NULL) {
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "get_storage_backend: No storage backend in current lifecycle %pp in thread %li for current tile layer %i",
                 lifecycle_pool, os_thread, tile_layer);
+
+        /* needed by log_message in store.c */
+        ap_server = r->server;
+
         stores->stores[tile_layer] = init_storage_backend(tile_config->store);
+
     } else {
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "get_storage_backend: Storage backend found in current lifecycle %pp for current tile layer %i in thread %li",
                 lifecycle_pool, tile_layer, os_thread);
@@ -1835,6 +1842,7 @@ static const char *load_tile_config(cmd_parms *cmd, void *mconfig, const char *c
             aspect_x = 1;
             aspect_y = 1;
             parameterize = 0;
+
         } else if (sscanf(line, "%[^=]=%[^;#]", key, value) == 2
                ||  sscanf(line, "%[^=]=\"%[^\"]\"", key, value) == 2) {
 
