@@ -6,11 +6,16 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <errno.h>
-
 #include "protocol.h"
 #include "render_config.h"
 #include "store_file.h"
 #include "store_file_utils.h"
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#if defined HAVE_LIBS3 && defined HAVE_LIBDSAA && (defined APACHE || defined RENDERD)
+#include "store_s3.h"
+#endif
 
 // Build parent directories for the specified file name
 // Note: the part following the trailing / is ignored
@@ -19,6 +24,9 @@ int mkdirp(const char *path) {
     struct stat s;
     char tmp[PATH_MAX];
     char *p;
+    #if defined HAVE_LIBS3 && defined HAVE_LIBDSAA && (defined APACHE || defined RENDERD)
+    MsgQueType msqtype = CREATE_DIR;
+    #endif
 
     strncpy(tmp, path, sizeof(tmp) - 1);
 
@@ -45,13 +53,18 @@ int mkdirp(const char *path) {
                     fprintf(stderr, "Error, is not a directory: %s\n", tmp);
                     return 1;
                 }
-            } else if (mkdir(tmp, 0777)) {
+            } else if (mkdir(tmp, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH | S_ISGID)) {
                     // Ignore multiple threads attempting to create the same directory
-                    if (errno != EEXIST) { 
+                    if (errno != EEXIST) {
                        perror(tmp);
                        return 1;
                     }
-                }
+            }
+            #if defined HAVE_LIBS3 && defined HAVE_LIBDSAA && (defined APACHE || defined RENDERD)
+             else {
+                 store_s3_cache_send_msg(tmp, msqtype);
+            }
+            #endif
             *p = '/';
         }
         p++;

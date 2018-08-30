@@ -416,6 +416,7 @@ void *render_thread(void * arg)
                             gettimeofday(&tim, NULL);
                             long t1=tim.tv_sec*1000+(tim.tv_usec/1000);
 
+                            #ifndef HAVE_LIBS3
                             struct stat_info sinfo = maps[i].store->tile_stat(maps[i].store, req->xmlname, req->options, item->mx, item->my, req->z);
 
                             if(sinfo.size > 0)
@@ -423,6 +424,7 @@ void *render_thread(void * arg)
                                        req->xmlname, req->z, item->mx, item->mx+size-1, item->my, item->my+size-1,
                                        (tim.tv_sec-sinfo.mtime)/86400.0);
                             else
+                            #endif
                                 syslog(LOG_DEBUG, "DEBUG: START TILE %s %d %d-%d %d-%d, new metatile",
                                        req->xmlname, req->z, item->mx, item->mx+size-1, item->my, item->my+size-1);
 
