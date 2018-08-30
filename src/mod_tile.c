@@ -1243,11 +1243,12 @@ static int tile_handler_serve(request_rec *r)
 #endif
         ap_set_content_type(r, tile_configs[rdata->layerNumber].mimeType);
         ap_set_content_length(r, len);
-        add_expiry(r, cmd);
-
+        if(! scfg->disableHttpCacheHeaders) {
+            add_expiry(r, cmd);
+        }
         gettimeofday(&end,NULL);
         incTimingCounter((end.tv_sec*1000000 + end.tv_usec) - (start.tv_sec*1000000 + start.tv_usec) , cmd->z, r);
-        
+
         if ((errstatus = ap_meets_conditions(r)) != OK) {
             free(buf);
             if (!incRespCounter(errstatus, r, cmd, rdata->layerNumber)) {
@@ -2203,6 +2204,14 @@ static const char *mod_tile_delaypool_render_config(cmd_parms *cmd, void *mconfi
     return NULL;
 }
 
+static const char *mod_tile_disable_http_cache_headers(cmd_parms *cmd, void *mconfig, int disableHttpCacheHeaders)
+{
+    tile_server_conf *scfg = ap_get_module_config(cmd->server->module_config, &tile_module);
+    scfg->disableHttpCacheHeaders = disableHttpCacheHeaders;
+    return NULL;
+}
+
+
 static void *create_tile_config(apr_pool_t *p, server_rec *s)
 {
     tile_server_conf * scfg = (tile_server_conf *) apr_pcalloc(p, sizeof(tile_server_conf));
@@ -2236,7 +2245,7 @@ static void *create_tile_config(apr_pool_t *p, server_rec *s)
     scfg->delaypoolRenderSize = AVAILABLE_RENDER_BUCKET_SIZE;
     scfg->delaypoolRenderRate = RENDER_TOPUP_RATE;
     scfg->bulkMode = 0;
-
+    scfg->disableHttpCacheHeaders = 0;
 
     return scfg;
 }
@@ -2278,6 +2287,8 @@ static void *merge_tile_config(apr_pool_t *p, void *basev, void *overridesv)
     scfg->delaypoolRenderSize = scfg_over->delaypoolRenderSize;
     scfg->delaypoolRenderRate = scfg_over->delaypoolRenderRate;
     scfg->bulkMode = scfg_over->bulkMode;
+    scfg->disableHttpCacheHeaders = scfg_over->disableHttpCacheHeaders;
+
 
     //Construct a table of minimum cache times per zoom level
     for (i = 0; i <= MAX_ZOOM_SERVER; i++) {
@@ -2469,6 +2480,13 @@ static const command_rec tile_cmds[] =
         NULL,                            /* argument to include in call */
         OR_OPTIONS,                      /* where available */
         "On Off - make all requests to renderd with bulk render priority, never mark tiles dirty"  /* directive description */
+    ),
+    AP_INIT_FLAG(
+        "ModTileDisableHTTPCacheHeaders",       /* directive name */
+        mod_tile_disable_http_cache_headers,     /* config action routine */
+        NULL,                            /* argument to include in call */
+        OR_OPTIONS,                      /* where available */
+        "On Off - disable of Cache-Control and Expires HTTP headers"  /* directive description */
     ),
     {NULL}
 };
