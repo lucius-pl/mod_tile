@@ -363,7 +363,7 @@ int s3_cache_process_event(S3Cache *s3Cache) {
     int msqid;
     struct msg_que_data msqdata;
 
-    if((msqid = msgget(MESSAGE_QUEUE_KEY, IPC_CREAT | S_IRUSR | S_IWGRP)) == -1) {
+    if((msqid = msgget(MESSAGE_QUEUE_KEY, IPC_CREAT | S_IRUSR | S_IWUSR | S_IWGRP)) == -1) {
         log_message(STORE_LOGLVL_ERR, "store_s3_cache_recive_msg: failed to create meesage queue for key=%d: %s", MESSAGE_QUEUE_KEY, strerror(errno));
         return -1;
     }
