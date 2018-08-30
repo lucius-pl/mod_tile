@@ -57,18 +57,8 @@ test: gen_tile_test
 	./gen_tile_test
 
 all-local:
-<<<<<<< HEAD
 	$(APXS) -c $(DEF_LDLIBS) $(AM_CFLAGS) -I@srcdir@/includes $(AM_LDFLAGS) $(STORE_LDFLAGS) ${APXS_CFLAGS} @srcdir@/src/mod_tile.c  @srcdir@/src/sys_utils.c @srcdir@/src/store.c @srcdir@/src/store_file.c @srcdir@/src/store_file_utils.c @srcdir@/src/store_memcached.c @srcdir@/src/store_rados.c @srcdir@/src/store_ro_http_proxy.c @srcdir@/src/store_ro_composite.c @srcdir@/src/store_s3.c @srcdir@/src/store_null.c
 
 install-mod_tile: 
 	mkdir -p $(DESTDIR)`$(APXS) -q LIBEXECDIR`
 	$(APXS) -S LIBEXECDIR=$(DESTDIR)`$(APXS) -q LIBEXECDIR` -c -i $(DEF_LDLIBS) $(AM_CFLAGS) ${APXS_CFLAGS} -I@srcdir@/includes $(AM_LDFLAGS) $(STORE_LDFLAGS) @srcdir@/src/mod_tile.c @srcdir@/src/sys_utils.c @srcdir@/src/store.c @srcdir@/src/store_file.c @srcdir@/src/store_file_utils.c @srcdir@/src/store_memcached.c @srcdir@/src/store_rados.c @srcdir@/src/store_ro_http_proxy.c @srcdir@/src/store_ro_composite.c @srcdir@/src/store_s3.c @srcdir@/src/store_null.c
-=======
-	$(APXS) -c $(DEF_LDLIBS) $(AM_CFLAGS) -I@srcdir@/includes $(AM_LDFLAGS) $(STORE_LDFLAGS) ${APXS_CFLAGS} @srcdir@/src/mod_tile.c  @srcdir@/src/sys_utils.c @srcdir@/src/store.c @srcdir@/src/store_file.c @srcdir@/src/store_file_utils.c @srcdir@/src/store_memcached.c @srcdir@/src/store_rados.c @srcdir@/src/store_ro_http_proxy.c @srcdir@/src/store_ro_composite.c @srcdir@/src/store_null.c
-
-install-mod_tile: 
-	mkdir -p $(DESTDIR)`$(APXS) -q LIBEXECDIR`
-	$(APXS) -S LIBEXECDIR=$(DESTDIR)`$(APXS) -q LIBEXECDIR` -c -i $(DEF_LDLIBS) $(AM_CFLAGS) ${APXS_CFLAGS} -I@srcdir@/includes $(AM_LDFLAGS) $(STORE_LDFLAGS) @srcdir@/src/mod_tile.c @srcdir@/src/sys_utils.c @srcdir@/src/store.c @srcdir@/src/store_file.c @srcdir@/src/store_file_utils.c @srcdir@/src/store_memcached.c @srcdir@/src/store_rados.c @srcdir@/src/store_ro_http_proxy.c @srcdir@/src/store_ro_composite.c @srcdir@/src/store_null.c
->>>>>>> feature/msg_log
-
-
