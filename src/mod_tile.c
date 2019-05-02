@@ -194,6 +194,12 @@ static int socket_init(request_rec *r)
     return fd;
 }
 
+static void add_http_header(apr_table_t *t, const char* key, const char* value)
+{
+    apr_table_setn(t, key, value);
+}
+
+
 static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediately)
 {
     int fd;
@@ -272,8 +278,10 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
 
                 if (cmd->x == resp.x && cmd->y == resp.y && cmd->z == resp.z && !strcmp(cmd->xmlname, resp.xmlname)) {
                     close(fd);
-                    if (resp.cmd == cmdDone)
+                    if (resp.cmd == cmdDone) {
+                        add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, "renderd");
                         return 1;
+                    }
                     else
                         return 0;
                 } else {
@@ -912,11 +920,13 @@ static int tile_storage_hook(request_rec *r)
                 ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
                     "Failed to increase fresh stats counter");
             }
+            add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, "cache");
             return OK;
             break;
         case tileOld:
         case tileVeryOld:
             if (scfg->bulkMode) {
+                add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, "cache");
                 return OK;
             } else if (avg > scfg->max_load_old) {
                // Too much load to render it now, mark dirty but return old tile
@@ -926,6 +936,7 @@ static int tile_storage_hook(request_rec *r)
                    ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
                         "Failed to increase fresh stats counter");
                }
+               add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, "cache");
                return OK;
             }
             renderPrio = (state==tileVeryOld)?2:1;
