@@ -915,7 +915,7 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
         tile_stat->mtime = st_stat.st_mtime;
         tile_stat->atime = st_stat.st_atime;
         tile_stat->ctime = st_stat.st_ctime;
-        strncpy(tile_stat->origin, "cache", ORIGIN_SIZE);
+        tile_stat->origin = cache;
 
         log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #1 successfully read properties of metatile from cache %s", cachePath);
 
@@ -966,6 +966,7 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
                 tile_stat->mtime = st_stat.st_mtime;
                 tile_stat->atime = st_stat.st_atime;
                 tile_stat->ctime = st_stat.st_ctime;
+                tile_stat->origin = cache;
                 log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #2 successfully read properties of metatile from cache %s", cachePath);
             }
         } else {
@@ -1032,6 +1033,7 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     tile_stat->size = request.tile_size;
     tile_stat->expired = request.tile_expired;
     tile_stat->mtime = request.tile_mod_time;
+    tile_stat->origin = s3;
 
     /* save metatile file to cache */
 
@@ -1101,6 +1103,7 @@ static void store_s3_tile_stat_without_cache(struct storage_backend *store, cons
     tile_stat->size = request.tile_size;
     tile_stat->expired = request.tile_expired;
     tile_stat->mtime = request.tile_mod_time;
+    tile_stat->origin = s3;
 }
 
 /*****************************************************************************/
@@ -1113,7 +1116,7 @@ static struct stat_info store_s3_tile_stat(struct storage_backend *store, const 
     tile_stat.mtime = 0;
     tile_stat.atime = 0;
     tile_stat.ctime = 0;
-    strncpy(tile_stat.origin, "S3", ORIGIN_SIZE);
+    tile_stat.origin = unknow;
 
     const char* cachePath = ((struct store_s3_ctx*)store->storage_ctx)->s3Cache.path;
 
