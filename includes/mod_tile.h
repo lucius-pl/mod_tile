@@ -34,6 +34,10 @@
 
 #define DEFAULT_ATTRIBUTION "&copy;<a href=\"http://www.openstreetmap.org/\">OpenStreetMap</a> and <a href=\"http://wiki.openstreetmap.org/wiki/Contributors\">contributors</a>, <a href=\"http://opendatacommons.org/licenses/odbl/\">(ODbL)</a>"
 
+/* Name of HTTP header indicating the origin of a map tile */
+#define TILE_ORIGIN_HTTP_HEADER_NAME "X-Tile-Origin"
+
+
 typedef struct delaypool_entry {
 	struct in6_addr ip_addr;
 	int available_tiles;

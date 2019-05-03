@@ -15,12 +15,15 @@ extern "C" {
 #define STORE_LOGLVL_WARNING  LOG_WARNING
 #define STORE_LOGLVL_ERR      LOG_ERR
 
+#define ORIGIN_SIZE 10
+
     struct stat_info {
         off_t     size;    /* total size, in bytes */
         time_t    atime;   /* time of last access */
         time_t    mtime;   /* time of last modification */
         time_t    ctime;   /* time of last status change */
-        int       expired;  /* has the tile expired */
+        int       expired; /* has the tile expired */
+        char      origin[ORIGIN_SIZE];  /* origin of a tile */
     };
 
     struct storage_backend {
