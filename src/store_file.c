@@ -149,11 +149,14 @@ static struct stat_info file_tile_stat(struct storage_backend * store, const cha
         tile_stat.mtime = 0;
         tile_stat.atime = 0;
         tile_stat.ctime = 0;
+        tile_stat.origin = unknow;
+
     } else {
         tile_stat.size = st_stat.st_size;
         tile_stat.mtime = st_stat.st_mtime;
         tile_stat.atime = st_stat.st_atime;
         tile_stat.ctime = st_stat.st_ctime;
+        tile_stat.origin = cache;
     }
 
     if (tile_stat.mtime < getPlanetTime(store->storage_ctx, xmlconfig)) {
