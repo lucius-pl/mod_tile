@@ -196,9 +196,10 @@ static int socket_init(request_rec *r)
     return fd;
 }
 
-static void add_http_header(apr_table_t *t, const char* key, const char* value)
+static void add_response_header(request_rec *r, const char* key, const char* value)
 {
-    apr_table_set(t, key, value);
+    apr_table_setn(r->headers_out, key, value);
+    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "added response header: %s=%s", key, value);
 }
 
 
@@ -281,7 +282,7 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
                 if (cmd->x == resp.x && cmd->y == resp.y && cmd->z == resp.z && !strcmp(cmd->xmlname, resp.xmlname)) {
                     close(fd);
                     if (resp.cmd == cmdDone) {
-                        add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, "renderd");
+                        add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(renderd));
                         return 1;
                     }
                     else
@@ -376,7 +377,7 @@ static struct storage_backend * get_storage_backend(request_rec *r, int tile_lay
     return stores->stores[tile_layer];
 }
 
-static enum tileState tile_state(request_rec *r, struct protocol *cmd, char *origin)
+static enum tileState tile_state(request_rec *r, struct protocol *cmd, tile_origin* origin)
 {
     ap_conf_vector_t *sconf = r->server->module_config;
     tile_server_conf *scfg = ap_get_module_config(sconf, &tile_module);
@@ -387,13 +388,13 @@ static enum tileState tile_state(request_rec *r, struct protocol *cmd, char *ori
     stat = rdata->store->tile_stat(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z);
 
     ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "tile_state: determined state of %s %i %i %i on store %pp: Tile size: %li, expired: %i created: %li, origin: %s",
-                      cmd->xmlname, cmd->x, cmd->y, cmd->z, rdata->store, stat.size, stat.expired, stat.mtime, stat.origin);
+                      cmd->xmlname, cmd->x, cmd->y, cmd->z, rdata->store, stat.size, stat.expired, stat.mtime, tile_origin_name(stat.origin));
 
     r->finfo.mtime = stat.mtime * 1000000;
     r->finfo.atime = stat.atime * 1000000;
     r->finfo.ctime = stat.ctime * 1000000;
 
-    strncpy(origin, stat.origin, ORIGIN_SIZE);
+    *origin = stat.origin;
 
     if (stat.size < 0) return tileMissing;
     if (stat.expired) {
@@ -454,8 +455,8 @@ static void add_expiry(request_rec *r, struct protocol * cmd)
 {
     apr_time_t holdoff;
     apr_table_t *t = r->headers_out;
-    char origin[ORIGIN_SIZE];
-    enum tileState state = tile_state(r, cmd, origin);
+    tile_origin origin;
+    enum tileState state = tile_state(r, cmd, &origin);
     apr_finfo_t *finfo = &r->finfo;
     char *timestr;
     long int maxAge, minCache, lastModified;
@@ -890,7 +891,7 @@ static int tile_storage_hook(request_rec *r)
     tile_server_conf *scfg;
     struct tile_request_data * rdata;
     struct protocol * cmd;
-    char origin[ORIGIN_SIZE];
+    tile_origin origin;
 
     if (!r->handler)
         return DECLINED;
@@ -912,7 +913,7 @@ static int tile_storage_hook(request_rec *r)
         return DECLINED;
 
     avg = get_load_avg();
-    state = tile_state(r, cmd, origin);
+    state = tile_state(r, cmd, &origin);
 
     sconf = r->server->module_config;
     scfg = ap_get_module_config(sconf, &tile_module);
@@ -931,13 +932,13 @@ static int tile_storage_hook(request_rec *r)
                 ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
                     "Failed to increase fresh stats counter");
             }
-            add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, origin);
+            add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(origin));
             return OK;
             break;
         case tileOld:
         case tileVeryOld:
             if (scfg->bulkMode) {
-                add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, origin);
+                add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(origin));
                 return OK;
             } else if (avg > scfg->max_load_old) {
                // Too much load to render it now, mark dirty but return old tile
@@ -947,7 +948,7 @@ static int tile_storage_hook(request_rec *r)
                    ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
                         "Failed to increase fresh stats counter");
                }
-               add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, origin);
+               add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(origin));
                return OK;
             }
             renderPrio = (state==tileVeryOld)?2:1;
@@ -1006,7 +1007,7 @@ static int tile_handler_status(request_rec *r)
     char storage_id[PATH_MAX];
     struct tile_request_data * rdata;
     struct protocol * cmd;
-    char origin[ORIGIN_SIZE];
+    tile_origin origin;
 
     if(strcmp(r->handler, "tile_status"))
         return DECLINED;
@@ -1018,7 +1019,7 @@ static int tile_handler_status(request_rec *r)
         return HTTP_NOT_FOUND;
     }
 
-    state = tile_state(r, cmd, origin);
+    state = tile_state(r, cmd, &origin);
     if (state == tileMissing)
         return error_message(r, "No tile could not be found at storage location: %s\n",
                              rdata->store->tile_storage_id(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z, storage_id));

@@ -15,7 +15,8 @@ extern "C" {
 #define STORE_LOGLVL_WARNING  LOG_WARNING
 #define STORE_LOGLVL_ERR      LOG_ERR
 
-#define ORIGIN_SIZE 10
+
+    typedef enum {unknow, renderd, cache, s3} tile_origin;
 
     struct stat_info {
         off_t     size;    /* total size, in bytes */
@@ -23,7 +24,7 @@ extern "C" {
         time_t    mtime;   /* time of last modification */
         time_t    ctime;   /* time of last status change */
         int       expired; /* has the tile expired */
-        char      origin[ORIGIN_SIZE];  /* origin of a tile */
+        tile_origin origin;  /* origin of a tile */
     };
 
     struct storage_backend {
@@ -41,6 +42,8 @@ extern "C" {
     void log_message(int log_lvl, const char *format, ...);
 
     struct storage_backend * init_storage_backend(const char * options);
+
+    char* tile_origin_name(tile_origin);
 
 #ifdef __cplusplus
 }
