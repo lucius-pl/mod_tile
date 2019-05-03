@@ -194,9 +194,10 @@ static int socket_init(request_rec *r)
     return fd;
 }
 
-static void add_http_header(apr_table_t *t, const char* key, const char* value)
+static void add_response_header(request_rec *r, const char* key, const char* value)
 {
-    apr_table_set(t, key, value);
+    apr_table_setn(r->headers_out, key, value);
+    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "added response header: %s=%s", key, value);
 }
 
 
@@ -279,7 +280,7 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
                 if (cmd->x == resp.x && cmd->y == resp.y && cmd->z == resp.z && !strcmp(cmd->xmlname, resp.xmlname)) {
                     close(fd);
                     if (resp.cmd == cmdDone) {
-                        add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, "renderd");
+                        add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(renderd));
                         return 1;
                     }
                     else
@@ -924,13 +925,13 @@ static int tile_storage_hook(request_rec *r)
                 ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
                     "Failed to increase fresh stats counter");
             }
-            add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(origin));
+            add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(origin));
             return OK;
             break;
         case tileOld:
         case tileVeryOld:
             if (scfg->bulkMode) {
-                add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(origin));
+                add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(origin));
                 return OK;
             } else if (avg > scfg->max_load_old) {
                // Too much load to render it now, mark dirty but return old tile
@@ -940,7 +941,7 @@ static int tile_storage_hook(request_rec *r)
                    ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
                         "Failed to increase fresh stats counter");
                }
-               add_http_header(r->headers_out, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(origin));
+               add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(origin));
                return OK;
             }
             renderPrio = (state==tileVeryOld)?2:1;
