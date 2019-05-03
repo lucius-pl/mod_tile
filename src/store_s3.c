@@ -915,6 +915,7 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
         tile_stat->mtime = st_stat.st_mtime;
         tile_stat->atime = st_stat.st_atime;
         tile_stat->ctime = st_stat.st_ctime;
+        strncpy(tile_stat->origin, "cache", ORIGIN_SIZE);
 
         log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #1 successfully read properties of metatile from cache %s", cachePath);
 
@@ -1112,6 +1113,7 @@ static struct stat_info store_s3_tile_stat(struct storage_backend *store, const 
     tile_stat.mtime = 0;
     tile_stat.atime = 0;
     tile_stat.ctime = 0;
+    strncpy(tile_stat.origin, "S3", ORIGIN_SIZE);
 
     const char* cachePath = ((struct store_s3_ctx*)store->storage_ctx)->s3Cache.path;
 
