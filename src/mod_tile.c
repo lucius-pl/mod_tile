@@ -915,6 +915,10 @@ static int tile_storage_hook(request_rec *r)
     avg = get_load_avg();
     state = tile_state(r, cmd, &origin);
 
+    static char buf[7];
+    snprintf(buf, sizeof(buf), "%.2f", avg);
+    add_http_header(r->headers_out, SYSTEM_LOAD_AVG_HTTP_HEADER_NAME, buf);
+
     sconf = r->server->module_config;
     scfg = ap_get_module_config(sconf, &tile_module);
 
