@@ -16,6 +16,7 @@
 #include <signal.h>
 #include <string.h>
 #include <strings.h>
+#define SYSLOG_NAMES
 #include <syslog.h>
 #include <getopt.h>
 
@@ -49,6 +50,7 @@ static renderd_config config;
 
 int noSlaveRenders;
 
+#define LOG_LEVEL_DEFAULT "info"
 
 static const char *cmdStr(enum protoCmd c)
 {
@@ -630,6 +632,33 @@ void *slave_thread(void * arg) {
     return NULL;
 }
 
+/**
+ * get log level value by name
+ */
+short get_log_level_value(const char* name) {
+
+    for(int i=0; i<sizeof(prioritynames)/sizeof(prioritynames[0]) - 1; i++) {
+        if(strcasecmp(name, prioritynames[i].c_name) == 0) {
+            return prioritynames[i].c_val;
+        }
+    }
+    return -1;
+}
+
+/**
+  * get log level name by value
+  */
+char* get_log_level_name(short value) {
+
+    for(int i=0; i<sizeof(prioritynames)/sizeof(prioritynames[0]) - 1; i++) {
+        if(value == prioritynames[i].c_val) {
+            return prioritynames[i].c_name;
+        }
+    }
+    return NULL;
+}
+
+
 #ifndef MAIN_ALREADY_DEFINED
 int main(int argc, char **argv)
 {
@@ -690,6 +719,9 @@ int main(int argc, char **argv)
 #endif
     openlog("renderd", log_options, LOG_DAEMON);
 
+    /*set default log level */
+    setlogmask(LOG_UPTO(get_log_level_value(LOG_LEVEL_DEFAULT)));
+
     syslog(LOG_INFO, "Rendering daemon started");
 
     render_request_queue = request_queue_init();
@@ -697,7 +729,7 @@ int main(int argc, char **argv)
         syslog(LOG_ERR, "Failed to initialise request queue");
         exit(1);
     }
-    syslog(LOG_ERR, "Initiating reqyest_queue");
+    syslog(LOG_INFO, "Initiating request_queue");
 
     xmlconfigitem maps[XMLCONFIGS_MAX];
     bzero(maps, sizeof(xmlconfigitem) * XMLCONFIGS_MAX);
@@ -851,6 +883,16 @@ int main(int argc, char **argv)
             sprintf(buffer, "%s:tile_dir", name);
             config_slaves[render_sec].tile_dir = iniparser_getstring(ini,
                     buffer, (char *) HASH_PATH);
+
+            sprintf(buffer, "%s:log_level", name);
+            char *ini_loglevel = iniparser_getstring(ini, buffer, (char *)LOG_LEVEL_DEFAULT);
+            short val_loglevel = get_log_level_value(ini_loglevel);
+            if(val_loglevel == -1) {
+                fprintf(stderr, "log_level = %s is incorrect. Should be one of: debug, info, warn, error.\n", ini_loglevel);
+                exit(7);
+            }
+            config_slaves[render_sec].log_level = val_loglevel;
+
             sprintf(buffer, "%s:stats_file", name);
             config_slaves[render_sec].stats_filename = iniparser_getstring(ini,
                     buffer, NULL);
@@ -861,6 +903,7 @@ int main(int argc, char **argv)
                 config.ipport = config_slaves[render_sec].ipport;
                 config.num_threads = config_slaves[render_sec].num_threads;
                 config.tile_dir = config_slaves[render_sec].tile_dir;
+                config.log_level = config_slaves[render_sec].log_level;
                 config.stats_filename
                         = config_slaves[render_sec].stats_filename;
                 config.mapnik_plugins_dir = iniparser_getstring(ini,
@@ -875,6 +918,9 @@ int main(int argc, char **argv)
         }
     }
 
+    /*set log level */
+    setlogmask(LOG_UPTO(config.log_level));
+
     if (config.ipport > 0) {
         syslog(LOG_INFO, "config renderd: ip socket=%s:%i\n", config.iphostname, config.ipport);
     } else {
@@ -884,6 +930,8 @@ int main(int argc, char **argv)
     if (active_slave == 0) {
         syslog(LOG_INFO, "config renderd: num_slaves=%d\n", noSlaveRenders);
     }
+
+    syslog(LOG_INFO, "config renderd: log_level=%s\n", get_log_level_name(config.log_level));
     syslog(LOG_INFO, "config renderd: tile_dir=%s\n", config.tile_dir);
     syslog(LOG_INFO, "config renderd: stats_file=%s\n", config.stats_filename);
     syslog(LOG_INFO, "config mapnik:  plugins_dir=%s\n", config.mapnik_plugins_dir);
