@@ -259,6 +259,7 @@ static reqTileState request_tile(request_rec *r, struct protocol *cmd, int rende
         int timeout = (renderImmediately > 2?scfg->request_timeout_priority:scfg->request_timeout) * 1000;
         int s;
         struct pollfd tpoll[2];
+        int size = sizeof(tpoll)/sizeof(tpoll[0]);
 
         while (1) {
         	memset((void*)tpoll, 0, sizeof(tpoll));
@@ -266,10 +267,12 @@ static reqTileState request_tile(request_rec *r, struct protocol *cmd, int rende
         	tpoll[0].fd = fd;
         	tpoll[0].events =  POLLIN;
 
-        	tpoll[1].fd = *rs;
-        	tpoll[1].events = POLLRDHUP;
+        	if(size == 2) {
+        		tpoll[1].fd = *rs;
+        		tpoll[1].events = POLLRDHUP;
+        	}
 
-            int s = poll(tpoll, sizeof(tpoll)/sizeof(tpoll[0]), timeout);
+            int s = poll(tpoll, size, timeout);
 
             ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: poll() return: %d", s);
 
@@ -302,9 +305,17 @@ static reqTileState request_tile(request_rec *r, struct protocol *cmd, int rende
                     if (cmd->x == resp.x && cmd->y == resp.y && cmd->z == resp.z && !strcmp(cmd->xmlname, resp.xmlname)) {
 
                         if (resp.cmd == cmdDone) {
+
                         	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering successfully: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
                         	close(fd);
                         	return reqOK;
+
+                        } else if(resp.cmd == cmdCancel) {
+
+                        	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering canceled: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
+                        	close(fd);
+                        	return reqAbort;
+
                         } else {
                         	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering failed: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
                             break;
@@ -318,9 +329,13 @@ static reqTileState request_tile(request_rec *r, struct protocol *cmd, int rende
 
                 } else if( tpoll[1].revents & POLLRDHUP ) {
 
-                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: peer closed connection");
-                	close(fd);
-                	return reqAbort;
+                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: peer closed connection, sending a cancellation request to render");
+                	cmd->cmd = cmdCancel;
+                	size = 1;
+                	if(send(fd, cmd, sizeof(struct protocol), 0) == -1) {
+                		ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering request cancellation failed: %s", strerror(errno));
+                		break;
+                	}
 
                 } else {
 

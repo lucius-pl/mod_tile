@@ -108,7 +108,7 @@ enum protoCmd rx_request(struct protocol *req, int fd)
     syslog(LOG_DEBUG, "DEBUG: Got command %s fd(%d) xml(%s), z(%d), x(%d), y(%d), mime(%s), options(%s)",
            cmdStr(req->cmd), fd, req->xmlname, req->z, req->x, req->y, req->mimetype, req->options);
 
-    if ((req->cmd != cmdRender) && (req->cmd != cmdRenderPrio) && (req->cmd != cmdRenderLow) && (req->cmd != cmdDirty) && (req->cmd != cmdRenderBulk)) {
+    if ((req->cmd != cmdRender) && (req->cmd != cmdRenderPrio) && (req->cmd != cmdRenderLow) && (req->cmd != cmdDirty) && (req->cmd != cmdRenderBulk) && (req->cmd != cmdCancel)) {
         syslog(LOG_WARNING, "WARNING: Ignoring unknown command %s fd(%d) xml(%s), z(%d), x(%d), y(%d)",
                     cmdStr(req->cmd), fd, req->xmlname, req->z, req->x, req->y);
         return cmdNotDone;
@@ -227,12 +227,22 @@ void process_loop(int listen_fd)
                         request_queue_clear_requests_by_fd(render_request_queue, fd);
                         close(fd);
                     } else  {
-                        enum protoCmd rsp = rx_request(&cmd, fd);
-                            
-                        if (rsp == cmdNotDone) {
-                            cmd.cmd = rsp;
-                            syslog(LOG_DEBUG, "DEBUG: Sending NotDone response(%d)\n", rsp);
-                            ret = send_cmd(&cmd, fd);
+
+                        if(cmd.cmd == cmdCancel) {
+
+                        	syslog(LOG_DEBUG, "DEBUG: Sending Cancel response(%d)", cmdCancel);
+                        	request_queue_clear_requests_by_fd(render_request_queue, fd);
+                        	send_cmd(&cmd, fd);
+                        	close(fd);
+
+                        } else {
+
+                        	enum protoCmd rsp = rx_request(&cmd, fd);
+                        	if (rsp == cmdNotDone) {
+                        		cmd.cmd = rsp;
+                        		syslog(LOG_DEBUG, "DEBUG: Sending NotDone response(%d)\n", rsp);
+                        		ret = send_cmd(&cmd, fd);
+                        	}
                         }
                     }
                 }
