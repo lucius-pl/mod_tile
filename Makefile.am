@@ -23,7 +23,7 @@ if !SYSTEM_LIBINIPARSER
     renderd_SOURCES += iniparser3.0b/libiniparser.la
     renderd_LDADD += -Liniparser3.0b/.libs
 endif
-renderd_DATA = renderd.conf
+noinst_DATA = renderd.conf
 render_speedtest_SOURCES = src/speedtest.cpp src/protocol_helper.c src/render_submit_queue.c src/sys_utils.c
 render_speedtest_LDADD = $(PTHREAD_CFLAGS)
 render_list_SOURCES = src/render_list.c src/sys_utils.c src/protocol_helper.c src/render_submit_queue.c $(STORE_SOURCES)
@@ -54,4 +54,8 @@ install-mod_tile:
 	mkdir -p $(DESTDIR)`$(APXS) -q LIBEXECDIR`
 	$(APXS) -S LIBEXECDIR=$(DESTDIR)`$(APXS) -q LIBEXECDIR` -c -i $(DEF_LDLIBS) $(AM_CFLAGS) -I@srcdir@/includes $(AM_LDFLAGS) $(STORE_LDFLAGS) @srcdir@/src/mod_tile.c @srcdir@/src/sys_utils.c @srcdir@/src/store.c @srcdir@/src/store_file.c @srcdir@/src/store_file_utils.c @srcdir@/src/store_memcached.c @srcdir@/src/store_rados.c @srcdir@/src/store_ro_http_proxy.c @srcdir@/src/store_ro_composite.c @srcdir@/src/store_null.c
 
-
+install-data-hook:
+	@if ! test -f ${renderddir}/${noinst_DATA}; then \
+		set -x; \
+		ginstall -c -m 644 ${noinst_DATA} ${renderddir}; \
+	fi
