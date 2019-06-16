@@ -27,6 +27,7 @@ typedef struct {
     int mapnik_font_dir_recurse;
     char * stats_filename;
     short log_level;
+    int log_facility;
 } renderd_config;
 
 typedef struct {
