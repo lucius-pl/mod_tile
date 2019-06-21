@@ -44,6 +44,7 @@ typedef struct {
     long timeReqBulkRender;
     long timeReqDirty;
     long timeZoomRender[MAX_ZOOM + 1];
+    long noReqCanceled;
 } stats_struct;
 
 struct item_idx {

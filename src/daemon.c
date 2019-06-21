@@ -314,6 +314,7 @@ void *stats_writeout_thread(void * arg) {
             fprintf(statfile, "ReqBulkQueueLength: %i\n", reqBulkQueueLength);
             fprintf(statfile, "DirtQueueLength: %i\n", dirtQueueLength);
             fprintf(statfile, "DropedRequest: %li\n", lStats.noReqDroped);
+            fprintf(statfile, "CanceledRequest: %li\n", lStats.noReqCanceled);
             fprintf(statfile, "ReqRendered: %li\n", lStats.noReqRender);
             fprintf(statfile, "TimeRendered: %li\n", lStats.timeReqRender);
             fprintf(statfile, "ReqPrioRendered: %li\n", lStats.noReqPrioRender);

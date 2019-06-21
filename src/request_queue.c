@@ -441,7 +441,7 @@ struct item* request_queue_remove_canceled_request(struct request_queue * queue,
 				case queueRequestBulk:
 			        queue->reqBulkNum--;
 			}
-
+			queue->stats.noReqCanceled++;
 		    pthread_mutex_unlock(&(queue->qLock));
 		    return request;
 		}
