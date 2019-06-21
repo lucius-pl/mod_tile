@@ -44,6 +44,7 @@ typedef struct {
     long timeReqBulkRender;
     long timeReqDirty;
     long timeZoomRender[MAX_ZOOM + 1];
+    long noReqCanceled;
 } stats_struct;
 
 struct item_idx {
@@ -70,6 +71,7 @@ enum protoCmd request_queue_add_request(struct request_queue * queue, struct ite
 
 void request_queue_remove_request(struct request_queue * queue, struct item * request, int render_time);
 void request_queue_clear_requests_by_fd(struct request_queue * queue, int fd);
+struct item* request_queue_remove_canceled_request(struct request_queue *, struct item *);
 
 int request_queue_no_requests_queued(struct request_queue * queue, enum protoCmd);
 void request_queue_copy_stats(struct request_queue * queue, stats_struct * stats);

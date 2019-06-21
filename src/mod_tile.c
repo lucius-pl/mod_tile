@@ -15,6 +15,7 @@
 #include "httpd.h"
 #include "http_config.h"
 #include "http_request.h"
+#include "http_connection.h"
 #include "http_core.h"
 #include "http_protocol.h"
 #include "http_main.h"
@@ -24,6 +25,7 @@
 #include "mod_core.h"
 #include "mod_cgi.h"
 #include "util_md5.h"
+
 
 module AP_MODULE_DECLARE_DATA tile_module;
 
@@ -45,7 +47,8 @@ module AP_MODULE_DECLARE_DATA tile_module;
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <inttypes.h>
-
+#include <signal.h>
+#include <poll.h>
 
 #include "gen_tile.h"
 #include "protocol.h"
@@ -76,6 +79,8 @@ apr_global_mutex_t *storage_mutex;
 char *mutexfilename;
 int layerCount = 0;
 int global_max_zoom = 0;
+
+server_rec* ap_server;
 
 struct storage_backends {
     struct storage_backend ** stores;
@@ -194,6 +199,7 @@ static int socket_init(request_rec *r)
     return fd;
 }
 
+
 static void add_response_header(request_rec *r, const char* key, const char* value)
 {
     apr_table_setn(r->headers_out, key, value);
@@ -202,6 +208,7 @@ static void add_response_header(request_rec *r, const char* key, const char* val
 
 
 static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediately)
+
 {
     int fd;
     int ret = 0;
@@ -210,12 +217,15 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
 
     ap_conf_vector_t *sconf = r->server->module_config;
     tile_server_conf *scfg = ap_get_module_config(sconf, &tile_module);
+    apr_os_sock_t *rs = (apr_os_sock_t*)ap_get_module_config(r->connection->conn_config, &tile_module);
+
+
 
     fd = socket_init(r);
 
     if (fd == FD_INVALID) {
         ap_log_rerror(APLOG_MARK, APLOG_NOTICE, 0, r, "Failed to connect to renderer");
-        return 0;
+        return reqError;
     }
 
     // cmd has already been partial filled, fill in the rest
@@ -228,7 +238,7 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
 
     if (scfg->bulkMode) cmd->cmd = cmdRenderBulk; 
 
-    ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r, "Requesting style(%s) z(%d) x(%d) y(%d) from renderer with priority %d", cmd->xmlname, cmd->z, cmd->x, cmd->y, cmd->cmd);
+    ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r, "Requesting style(%s) z(%d) x(%d) y(%d) from renderer with priority: %d and protocol version: %d", cmd->xmlname, cmd->z, cmd->x, cmd->y, cmd->cmd, cmd->ver);
     do {
         switch (cmd->ver) {
         case 2: 
@@ -245,7 +255,7 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
         if (errno != EPIPE) {
             ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r, "request_tile: Failed to send request to renderer: %s", strerror(errno));
             close(fd);
-            return 0;
+            return reqError;
         }
         close(fd);
 
@@ -253,55 +263,108 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
 
         fd = socket_init(r);
         if (fd == FD_INVALID)
-            return 0;
+            return reqError;
     } while (retry--);
 
     if (renderImmediately) {
-        struct timeval tv = {(renderImmediately > 2?scfg->request_timeout_priority:scfg->request_timeout), 0 };
-        fd_set rx;
+        int timeout = (renderImmediately > 2?scfg->request_timeout_priority:scfg->request_timeout) * 1000;
         int s;
+        struct pollfd tpoll[2];
+        int size = sizeof(tpoll)/sizeof(tpoll[0]);
 
         while (1) {
-            FD_ZERO(&rx);
-            FD_SET(fd, &rx);
-            s = select(fd+1, &rx, NULL, NULL, &tv);
-            if (s == 1) {
-                bzero(&resp, sizeof(struct protocol));
-                ret = recv(fd, &resp, sizeof(struct protocol_v2), 0);
-                if (ret != sizeof(struct protocol_v2)) {
-                    ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r, "request_tile: Failed to read response from rendering socket %s",
-                                  strerror(errno));
-                    break;
-                }
-                if (resp.ver == 3) {
-                    ret += recv(fd, ((void*)&resp) + sizeof(struct protocol_v2), sizeof(struct protocol) - sizeof(struct protocol_v2), 0); 
-                }
+        	memset((void*)tpoll, 0, sizeof(tpoll));
 
-                if (cmd->x == resp.x && cmd->y == resp.y && cmd->z == resp.z && !strcmp(cmd->xmlname, resp.xmlname)) {
-                    close(fd);
-                    if (resp.cmd == cmdDone) {
-                        add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(renderd));
-                        return 1;
-                    }
-                    else
-                        return 0;
-                } else {
-                    ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
-                       "Response does not match request: xml(%s,%s) z(%d,%d) x(%d,%d) y(%d,%d)", cmd->xmlname,
-                       resp.xmlname, cmd->z, resp.z, cmd->x, resp.x, cmd->y, resp.y);
-                }
-            } else {
+
+        	tpoll[0].fd = fd;
+        	tpoll[0].events =  POLLIN;
+
+        	if(size == 2) {
+        		tpoll[1].fd = *rs;
+        		tpoll[1].events = POLLRDHUP;
+        	}
+
+            int s = poll(tpoll, size, timeout);
+
+            ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: poll() return: %d", s);
+
+            if(s < 0) {
+            	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: poll() error: %s", strerror(errno));
+            	break;
+
+            } else if(s == 0) {
                 ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,
                               "request_tile: Request xml(%s) z(%d) x(%d) y(%d) could not be rendered in %i seconds",
                               cmd->xmlname, cmd->z, cmd->x, cmd->y,
                               (renderImmediately > 1?scfg->request_timeout_priority:scfg->request_timeout));
-                break;
+                close(fd);
+                return reqTimeout;
+
+            } else {
+                if (tpoll[0].revents & POLLIN) {
+                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: render replied");
+                    bzero(&resp, sizeof(struct protocol));
+                    ret = recv(fd, &resp, sizeof(struct protocol_v2), 0);
+                    if (ret != sizeof(struct protocol_v2)) {
+                        ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r, "request_tile: Failed to read response from rendering socket %s",
+                                      strerror(errno));
+                        break;
+                    }
+                    if (resp.ver == 3) {
+                        ret += recv(fd, ((void*)&resp) + sizeof(struct protocol_v2), sizeof(struct protocol) - sizeof(struct protocol_v2), 0);
+                    }
+
+                    if (cmd->x == resp.x && cmd->y == resp.y && cmd->z == resp.z && !strcmp(cmd->xmlname, resp.xmlname)) {
+
+                        if (resp.cmd == cmdDone) {
+
+                        	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering successfully: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
+                        	close(fd);
+                        	return reqOK;
+
+                        } else if(resp.cmd == cmdCancelDone) {
+
+                        	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: request canceled: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
+                        	close(fd);
+                        	return reqAbort;
+
+                        } else if(resp.cmd == cmdCancelNotDone) {
+
+                        	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: request not canceled: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
+                        	close(fd);
+                        	return reqAbort;
+
+                        } else {
+                        	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering failed: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
+                            break;
+                        }
+
+                    } else {
+                        ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
+                           "Response does not match request: xml(%s,%s) z(%d,%d) x(%d,%d) y(%d,%d)", cmd->xmlname,
+                           resp.xmlname, cmd->z, resp.z, cmd->x, resp.x, cmd->y, resp.y);
+                    }
+
+                } else if( tpoll[1].revents & POLLRDHUP ) {
+                	cmd->cmd = cmdCancel;
+                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: peer closed connection, sending a cancellation request to render: xml(%s) z(%d) x(%d) y(%d)", cmd->xmlname, cmd->z, cmd->x, cmd->y);
+                	size = 1;
+                	if(send(fd, cmd, sizeof(struct protocol_v2), 0) == -1) {
+                		ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering request cancellation failed: %s", strerror(errno));
+                		break;
+                	}
+
+                } else {
+
+                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: render poll response events: %d", tpoll[0].revents);
+                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: peer poll response events: %d", tpoll[1].revents);
+                }
             }
         }
     }
 
     close(fd);
-    return 0;
+    return reqError;
 }
 
 static apr_status_t cleanup_storage_backend(void * data) {
@@ -361,7 +424,12 @@ static struct storage_backend * get_storage_backend(request_rec *r, int tile_lay
     if (stores->stores[tile_layer] == NULL) {
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "get_storage_backend: No storage backend in current lifecycle %pp in thread %li for current tile layer %i",
                 lifecycle_pool, os_thread, tile_layer);
+
+        /* needed by log_message in store.c */
+        ap_server = r->server;
+
         stores->stores[tile_layer] = init_storage_backend(tile_config->store);
+
     } else {
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "get_storage_backend: Storage backend found in current lifecycle %pp for current tile layer %i in thread %li",
                 lifecycle_pool, tile_layer, os_thread);
@@ -960,7 +1028,10 @@ static int tile_storage_hook(request_rec *r)
             break;
     }
 
-    if (request_tile(r, cmd, renderPrio)) {
+
+    reqTileState rts = request_tile(r, cmd, renderPrio);
+
+    if (rts == reqOK) {
         //TODO: update finfo
         if (!incFreshCounter(FRESH_RENDER, r)) {
             ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
@@ -976,6 +1047,7 @@ static int tile_storage_hook(request_rec *r)
         }
         return OK;
     }
+
     if (state == tileVeryOld) {
         if (!incFreshCounter(VERYOLD_RENDER, r)) {
             ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
@@ -983,7 +1055,11 @@ static int tile_storage_hook(request_rec *r)
         }
         return OK;
     }
-    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "tile_storage_hook: Missing tile was not rendered in time. Returning File Not Found");
+
+    if(rts == reqTimeout) {
+    	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "tile_storage_hook: Missing tile was not rendered in time. Returning File Not Found");
+    }
+
     if (!incRespCounter(HTTP_NOT_FOUND, r, cmd, rdata->layerNumber)) {
         ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
                 "Failed to increase response stats counter");
@@ -1656,6 +1732,45 @@ static void mod_tile_child_init(apr_pool_t *p, server_rec *s)
      }
 }
 
+static int tile_pre_connection(conn_rec *c, void *csd ) {
+
+	ap_log_cerror(APLOG_MARK, APLOG_DEBUG, 0, c, "New client connection from: %s", c->client_ip);
+	apr_os_sock_t *p_os_fd = apr_palloc(c->pool, sizeof(apr_os_sock_t));
+	apr_os_sock_get(p_os_fd, (apr_socket_t *)csd);
+	ap_set_module_config(c->conn_config, &tile_module, p_os_fd);
+
+
+	/*
+	apr_socket_t* ast = (apr_socket_t*)csd;
+
+
+    apr_os_sock_t socket;
+
+    apr_os_sock_get(&socket, ast);
+
+    struct pollfd fds;
+    fds.fd = socket;
+    fds.events = POLLRDHUP;
+
+    int r = poll(&fds, 1, 30000);
+    ap_log_cerror(APLOG_MARK, APLOG_DEBUG, 0, c, "Poll return: %d", r);
+    if(fds.revents & POLLRDHUP) {
+    	 ap_log_cerror(APLOG_MARK, APLOG_DEBUG, 0, c, "Peer close connection");
+    }
+	*/
+
+
+
+	return OK;
+}
+
+static int tile_pre_close_connection ( conn_rec * c) {
+
+	ap_log_cerror(APLOG_MARK, APLOG_DEBUG, 0, c, "Close client connection from: %s", c->client_ip);
+	return OK;
+}
+
+
 static void register_hooks(__attribute__((unused)) apr_pool_t *p)
 {
     ap_hook_post_config(mod_tile_post_config, NULL, NULL, APR_HOOK_MIDDLE);
@@ -1667,6 +1782,8 @@ static void register_hooks(__attribute__((unused)) apr_pool_t *p)
     ap_hook_handler(tile_handler_mod_stats, NULL, NULL, APR_HOOK_MIDDLE);
     ap_hook_translate_name(tile_translate, NULL, NULL, APR_HOOK_MIDDLE);
     ap_hook_map_to_storage(tile_storage_hook, NULL, NULL, APR_HOOK_FIRST);
+    ap_hook_pre_connection(tile_pre_connection, NULL, NULL, APR_HOOK_MIDDLE);
+    ap_hook_pre_close_connection(tile_pre_close_connection, NULL, NULL, APR_HOOK_MIDDLE);
 }
 
 static const char *_add_tile_config(cmd_parms *cmd, void *mconfig,
@@ -1851,6 +1968,7 @@ static const char *load_tile_config(cmd_parms *cmd, void *mconfig, const char *c
             aspect_x = 1;
             aspect_y = 1;
             parameterize = 0;
+
         } else if (sscanf(line, "%[^=]=%[^;#]", key, value) == 2
                ||  sscanf(line, "%[^=]=\"%[^\"]\"", key, value) == 2) {
 

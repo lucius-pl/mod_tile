@@ -855,7 +855,7 @@ TEST_CASE( "storage-backend", "Tile storage backend" ) {
 
         store = init_storage_backend(tile_dir);
         REQUIRE( store != NULL );
-        
+
         metaTile tiles("default", "", 1024 + 4*METATILE, 1024, 10);
 
         for (int yy = 0; yy < METATILE; yy++) {

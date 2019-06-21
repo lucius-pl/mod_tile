@@ -399,6 +399,9 @@ void *render_thread(void * arg)
     while (1) {
         enum protoCmd ret;
         struct item *item = request_queue_fetch_request(render_request_queue);
+
+        syslog(LOG_DEBUG, "DEBUG: render_thread, fetch request from rendering queue: fd(%d) z(%d) x(%d) y(%d), ", item->fd, item->req.z, item->req.x, item->req.y);
+
         render_time = -1;
         if (item) {
             struct protocol *req = &item->req;

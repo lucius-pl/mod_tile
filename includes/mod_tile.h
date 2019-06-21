@@ -133,5 +133,7 @@ typedef struct tile_request_data {
 
 enum tileState { tileMissing, tileOld, tileVeryOld, tileCurrent };
 
+/* state of the tile rendering request */
+typedef enum reqTileState { reqError, reqOK, reqTimeout, reqAbort } reqTileState;
 
 #endif
