@@ -229,7 +229,7 @@ static reqTileState request_tile(request_rec *r, struct protocol *cmd, int rende
 
     if (scfg->bulkMode) cmd->cmd = cmdRenderBulk; 
 
-    ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r, "Requesting style(%s) z(%d) x(%d) y(%d) from renderer with priority %d", cmd->xmlname, cmd->z, cmd->x, cmd->y, cmd->cmd);
+    ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r, "Requesting style(%s) z(%d) x(%d) y(%d) from renderer with priority: %d and protocol version: %d", cmd->xmlname, cmd->z, cmd->x, cmd->y, cmd->cmd, cmd->ver);
     do {
         switch (cmd->ver) {
         case 2: 
@@ -312,9 +312,15 @@ static reqTileState request_tile(request_rec *r, struct protocol *cmd, int rende
                         	close(fd);
                         	return reqOK;
 
-                        } else if(resp.cmd == cmdCancel) {
+                        } else if(resp.cmd == cmdCancelDone) {
 
-                        	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering canceled: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
+                        	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: request canceled: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
+                        	close(fd);
+                        	return reqAbort;
+
+                        } else if(resp.cmd == cmdCancelNotDone) {
+
+                        	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: request not canceled: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
                         	close(fd);
                         	return reqAbort;
 
@@ -330,11 +336,10 @@ static reqTileState request_tile(request_rec *r, struct protocol *cmd, int rende
                     }
 
                 } else if( tpoll[1].revents & POLLRDHUP ) {
-
-                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: peer closed connection, sending a cancellation request to render");
                 	cmd->cmd = cmdCancel;
+                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: peer closed connection, sending a cancellation request to render: xml(%s) z(%d) x(%d) y(%d)", cmd->xmlname, cmd->z, cmd->x, cmd->y);
                 	size = 1;
-                	if(send(fd, cmd, sizeof(struct protocol), 0) == -1) {
+                	if(send(fd, cmd, sizeof(struct protocol_v2), 0) == -1) {
                 		ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering request cancellation failed: %s", strerror(errno));
                 		break;
                 	}

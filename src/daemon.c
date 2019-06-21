@@ -53,7 +53,7 @@ int noSlaveRenders;
 #define LOG_LEVEL_DEFAULT "info"
 #define LOG_FACILITY_DEFAULT "daemon"
 
-static const char *cmdStr(enum protoCmd c)
+const char *cmdStr(enum protoCmd c)
 {
     switch (c) {
         case cmdIgnore:  return "Ignore";
@@ -64,6 +64,9 @@ static const char *cmdStr(enum protoCmd c)
         case cmdDirty:   return "Dirty";
         case cmdDone:    return "Done";
         case cmdNotDone: return "NotDone";
+        case cmdCancel:	 return "Cancel";
+        case cmdCancelDone:	 	return "CancelDone";
+        case cmdCancelNotDone:	 return "CancelNotDone";
         default:         return "unknown";
     }
 }
@@ -75,11 +78,14 @@ void send_response(struct item *item, enum protoCmd rsp, int render_time) {
     struct protocol *req = &item->req;
     struct item *prev;
 
-    request_queue_remove_request(render_request_queue, item, render_time);
+    //a canceled request is already removed
+    if(render_time != 0) {
+    	request_queue_remove_request(render_request_queue, item, render_time);
+    }
 
     while (item) {
         req = &item->req;
-        if ((item->fd != FD_INVALID) && ((req->cmd == cmdRender) || (req->cmd == cmdRenderPrio) || (req->cmd == cmdRenderBulk))) {
+        if ((item->fd != FD_INVALID) && ((req->cmd == cmdRender) || (req->cmd == cmdRenderPrio) || (req->cmd == cmdRenderBulk) || (req->cmd == cmdCancel))) {
             req->cmd = rsp;
             //fprintf(stderr, "Sending message %s to %d\n", cmdStr(rsp), item->fd);
             
@@ -94,7 +100,7 @@ void send_response(struct item *item, enum protoCmd rsp, int render_time) {
 
 enum protoCmd rx_request(struct protocol *req, int fd)
 {
-    struct item  *item;
+    struct item  *item, *request;
 
     // Upgrade version 1 and 2 to  version 3
     if (req->ver == 1) {
@@ -139,7 +145,24 @@ enum protoCmd rx_request(struct protocol *req, int fd)
     item->my = item->req.y;
 #endif
 
-    return request_queue_add_request(render_request_queue, item);
+    if(req->cmd == cmdCancel) {
+    	enum protoCmd ret = cmdCancelDone;
+    	request = request_queue_remove_canceled_request(render_request_queue, item);
+    	if(request) {
+    		syslog(LOG_DEBUG, "DEBUG: remove request from inQueue(%d): fd(%d) z(%d) x(%d) y(%d)", request->inQueue, request->fd, request->req.z, request->req.x, request->req.y);
+    		send_response(request, ret, 0);
+    	} else {
+       		syslog(LOG_DEBUG, "DEBUG: skipped cancel request, not found or rendering already: fd(%d) z(%d) x(%d) y(%d)", item->fd, item->req.z, item->req.x, item->req.y);
+       		ret = cmdCancelNotDone;
+    	}
+    	free(item);
+    	return ret;
+
+    } else {
+
+    	syslog(LOG_DEBUG, "DEBUG: add_request_to_queue: fd(%d) z(%d) x(%d) y(%d), ", item->fd, item->req.z, item->req.x, item->req.y);
+    	return request_queue_add_request(render_request_queue, item);
+    }
 }
 
 void request_exit(void)
@@ -231,21 +254,11 @@ void process_loop(int listen_fd)
                         close(fd);
                     } else  {
 
-                        if(cmd.cmd == cmdCancel) {
-
-                        	syslog(LOG_DEBUG, "DEBUG: Sending Cancel response(%d)", cmdCancel);
-                        	request_queue_clear_requests_by_fd(render_request_queue, fd);
-                        	send_cmd(&cmd, fd);
-                        	close(fd);
-
-                        } else {
-
-                        	enum protoCmd rsp = rx_request(&cmd, fd);
-                        	if (rsp == cmdNotDone) {
-                        		cmd.cmd = rsp;
-                        		syslog(LOG_DEBUG, "DEBUG: Sending NotDone response(%d)\n", rsp);
-                        		ret = send_cmd(&cmd, fd);
-                        	}
+                    	enum protoCmd rsp = rx_request(&cmd, fd);
+                        if (rsp == cmdNotDone || rsp == cmdCancelNotDone) {
+                        	cmd.cmd = rsp;
+                        	syslog(LOG_DEBUG, "DEBUG: Sending %s(%d) response", cmdStr(rsp), rsp);
+                        	ret = send_cmd(&cmd, fd);
                         }
                     }
                 }

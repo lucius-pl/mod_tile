@@ -413,3 +413,47 @@ void request_queue_close(struct request_queue * queue) {
     free(queue->item_hashidx);
     free(queue);
 }
+
+/*****************************************************************************/
+
+struct item* request_queue_remove_canceled_request(struct request_queue * queue, struct item * item) {
+
+	struct item *request = lookup_item_idx(queue, item);
+	if(request) {
+		if(request->inQueue != queueRender) {
+			pthread_mutex_lock(&(queue->qLock));
+		    request->next->prev = request->prev;
+		    request->prev->next = request->next;
+			remove_item_idx(queue, request);
+			switch(request->originatedQueue) {
+				case queueRequestPrio:
+					queue->reqPrioNum--;
+					break;
+				case queueRequest:
+			        queue->reqNum--;
+			        break;
+				case queueRequestLow:
+			        queue->reqLowNum--;
+			        break;
+				case queueDirty:
+			        queue->dirtyNum--;
+			        break;
+				case queueRequestBulk:
+			        queue->reqBulkNum--;
+			}
+
+		    pthread_mutex_unlock(&(queue->qLock));
+		    return request;
+		}
+	}
+
+	return NULL;
+}
+
+/*****************************************************************************/
+
+
+
+
+
+
