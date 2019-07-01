@@ -21,6 +21,8 @@
 #include <sys/file.h>
 #include <dirent.h>
 #include <libgen.h>
+#include <poll.h>
+#include <unistd.h>
 
 #ifdef HAVE_LIBS3
 #include <libs3.h>
@@ -248,6 +250,7 @@ int s3_cache_read_dir(char* name, S3Cache *s3Cache) {
 
 void s3_cache_print(S3Cache* s3Cache) {
 
+	log_message(STORE_LOGLVL_DEBUG,"-");
     list_print(&s3Cache->fileList, list_item_first);
     log_message(STORE_LOGLVL_DEBUG, "S3 cache file size: %ld", s3Cache->fileSize);
     log_message(STORE_LOGLVL_DEBUG, "S3 cache file count: %d", s3Cache->fileCount);
@@ -257,6 +260,7 @@ void s3_cache_print(S3Cache* s3Cache) {
     log_message(STORE_LOGLVL_DEBUG, "S3 cache dir count: %d", s3Cache->dirCount);
 
     log_message(STORE_LOGLVL_DEBUG, "S3 cache size: %ld, S3 cache size limit: %ld", s3Cache->fileSize + s3Cache->dirSize, s3Cache->size);
+    log_message(STORE_LOGLVL_DEBUG,"-");
 }
 
 /*****************************************************************************/
@@ -381,8 +385,9 @@ int s3_cache_process_event(S3Cache *s3Cache) {
                 case CREATE_FILE:
                     s3_cache_add_file(path, s3Cache, mode);
                     s3_cache_print(s3Cache);
-                    s3_cache_reduce_size(s3Cache);
-                    s3_cache_print(s3Cache);
+                    if(s3_cache_reduce_size(s3Cache)) {
+                    	s3_cache_print(s3Cache);
+                    }
                     break;
                 case READ:
                     s3_cache_update_file(s3Cache, path);
@@ -458,8 +463,9 @@ static void* exec_cache_cleaner_thread(void* v) {
     }
 
     s3_cache_print(&s3Cache);
-    s3_cache_reduce_size(&s3Cache);
-    s3_cache_print(&s3Cache);
+    if(s3_cache_reduce_size(&s3Cache)) {
+    	s3_cache_print(&s3Cache);
+    }
 
     s3_cache_process_event(&s3Cache);
 
@@ -885,24 +891,97 @@ static int store_s3_tile_read(struct storage_backend *store, const char *xmlconf
 
 /*****************************************************************************/
 
-#if defined APACHE || defined RENDERD
-static key_t createSemaphoreKey(const char* cachePath) {
-  const char* c = cachePath;
-  long sum = 0;
+#if defined APACHE
 
-  while(*c) {
-    sum += *c++;
-  }
+static short store_s3_socket_closed(int socket) {
 
-  return sum;
+	struct pollfd fds;
+
+	fds.fd = socket;
+	fds.events = POLLRDHUP;
+	int r = poll(&fds, 1, 0);
+
+
+	if(fds.revents & POLLRDHUP) {
+		log_message(STORE_LOGLVL_DEBUG, "store_s3_socket_closed: peer closed connection, POLLRDUP(%x)", r);
+		return 1;
+
+	} else if(r == -1) {
+		log_message(STORE_LOGLVL_ERR, "store_s3_socket_closed: poll(%d) error, %s", socket, strerror(errno));
+
+	} else {
+		log_message(STORE_LOGLVL_DEBUG, "store_s3_socket_closed: opened, poll() returns (%d)", r);
+	}
+
+	return 0;
 }
+
 #endif
 
 /*****************************************************************************/
 
+#if defined APACHE || defined RENDERD
+
+static void store_s3_pipe_path(char *pipePath, size_t len, char* path) {
+
+	  const char* c = path;
+	  long sum = 0;
+
+	  while(*c) {
+	    sum += *c++;
+	  }
+
+	  snprintf(pipePath, len, "%s/%d", PIPE_DIR, sum);
+}
+
+/*****************************************************************************/
+
+static void store_s3_pipe_remove(char* path) {
+
+	if(unlink(path) == -1) {
+		log_message(STORE_LOGLVL_ERR, "store_s3_pipe_remove: unlink(%s) failed, %s", path, strerror(errno));
+	} else {
+		log_message(STORE_LOGLVL_DEBUG, "store_s3_pipe_remove: unlink(%s) successful", path);
+	}
+}
+
+/*****************************************************************************/
+
+static void store_s3_pipe_hup(char* path) {
+
+	int fd = open(path, O_WRONLY |  O_NONBLOCK);
+	if(fd == -1) {
+		log_message(STORE_LOGLVL_ERR, "store_s3_pipe_hup: open(%s) failed, %s", path, strerror(errno));
+	} else {
+		close(fd);
+		log_message(STORE_LOGLVL_DEBUG, "store_s3_pipe_hup: event close(%s) successful", path);
+	}
+}
+
+/*****************************************************************************/
+
+static void store_s3_tile_cancel(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z) {
+
+    char cachePath[PATH_MAX];
+    char pipePath[PATH_MAX];
+    struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
+    xyzo_to_meta(cachePath, PATH_MAX, ctx->s3Cache.path, xmlconfig, options, x, y, z);
+    store_s3_pipe_path(pipePath, PATH_MAX, cachePath);
+
+    log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_cancel: cancel for %s", pipePath);
+
+    store_s3_pipe_hup(pipePath);
+    store_s3_pipe_remove(pipePath);
+}
+
+/*****************************************************************************/
+
+#endif
+
 static void store_s3_tile_stat_with_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, struct stat_info *tile_stat) {
 
     char cachePath[PATH_MAX];
+    char pipePath[PATH_MAX];
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
     struct stat st_stat;
 
@@ -924,66 +1003,81 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
 
     #ifdef APACHE
 
-    /* create samaphore to get matatile from S3 only be one apache process */
-    /* TODO: remove semaphore if renderd is off and a metatile is needed by one process only, proposals are as follows: 
-       1. don't create semaphore if renderd is off,
-       2. during startup of renderd all semaphores owned by renderd are removed,
-       3. others?  */
+    	if(store_s3_socket_closed(store->socket)) {
+    		tile_stat->aborted = 1;
+    		return;
+    	}
 
-    key_t key = createSemaphoreKey(cachePath);
-    long semId = semget(key, 1, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
-    if(semId == -1) {
-        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: failed to create semaphore for key=%d: %s", key, strerror(errno));
-        semId = semget(key, 1, S_IRUSR);
-        if(semId == -1) {
-          log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: failed to get semaphore for key=%d: %s", key, strerror(errno));
-          return;
-        }
-    } else {
-        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: semaphore id=%d created for key=%d", semId, key);
-        if(semctl(semId, 0, SETVAL, 1) == -1) {
-            log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: failed to set initial value of semaphore id=%d: %s", semId, strerror(errno));
-            return;
-        }
-    }
+        mode_t pumask = umask(0);
+        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: reset umask to 0, previous umask is (%04o)", pumask);
 
-    struct sembuf sops;
-    sops.sem_num = 0;
-    sops.sem_op = -1;
-    sops.sem_flg = SEM_UNDO;
+        store_s3_pipe_path(pipePath, PATH_MAX, cachePath);
+		if(mkfifo(pipePath, S_IRUSR |  S_IWUSR | S_IRGRP | S_IWGRP) != 0 ) {
 
-    struct timespec tp;
-    tp.tv_sec = TIMEOUT / 1000;
-    tp.tv_nsec = 0;
+			if(errno == EEXIST) {
 
-    int r = semtimedop(semId, &sops, 1, &tp);
-    if(r == -1) {
-        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: failed to up semaphore id=%d: %s", semId, strerror(errno));
-        if(errno == EIDRM) {
-            /* metatile should be in cache now */
-            if(! stat(cachePath, &st_stat)) {
-                tile_stat->size = st_stat.st_size;
-                tile_stat->mtime = st_stat.st_mtime;
-                tile_stat->atime = st_stat.st_atime;
-                tile_stat->ctime = st_stat.st_ctime;
-                tile_stat->origin = cache;
-                log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #2 successfully read properties of metatile from cache %s", cachePath);
-            }
-        } else {
-          if (errno == EAGAIN) {
-              log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: timeout for semaphore id=%d: %s", semId, strerror(errno));
-          }
+				int fd = open(pipePath, O_RDONLY |  O_NONBLOCK);
 
-          if(semctl(semId, 0, IPC_RMID) == -1) {
-              log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: #1 failed to remove semaphore id=%d: %s", semId, strerror(errno));
-          } else {
-             log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: semaphore id=%d removed", semId);
-          }
-        }
-        return;
-    }
+				struct pollfd fds[2];
+
+				fds[0].fd =  fd;
+
+				fds[1].fd = store->socket;
+				fds[1].events = POLLRDHUP;
+
+				log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: waiting for poll(%s) event ...", pipePath);
+				int r = poll(fds, 2, store->timeout);
+
+				if(r == -1) {
+					log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: poll(%s) error, %s", pipePath, strerror(errno));
+					close(fd);
+
+				} else if(r == 0) {
+
+					log_message(STORE_LOGLVL_WARNING, "store_s3_tile_stat: poll(%s) timeout", pipePath);
+					close(fd);
+					tile_stat->aborted = 1;
+
+					return;
+
+				} else {
+
+					log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: poll(%s) events %x", pipePath, fds[r].revents);
+
+					if(fds[0].revents & POLLHUP) {
+
+						log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: poll(%s) event  POLLHUP(%x)", pipePath, fds[0].revents);
+						close(fd);
+
+						if(! stat(cachePath, &st_stat)) {
+							tile_stat->size = st_stat.st_size;
+							tile_stat->mtime = st_stat.st_mtime;
+							tile_stat->atime = st_stat.st_atime;
+							tile_stat->ctime = st_stat.st_ctime;
+							tile_stat->origin = cache;
+							log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #2 successfully read properties of metatile from cache %s", cachePath);
+							return;
+						}
+
+					} else if(fds[1].revents & POLLRDHUP) {
+
+						log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: poll(%s) event  POLLRDHUP(%x)", pipePath, fds[1].revents);
+						tile_stat->aborted = 1;
+						close(fd);
+						return;
+					}
+				}
+
+			} else {
+				log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: mkfifo(%s) failed, %s", pipePath, strerror(errno));
+			}
+
+		} else {
+			log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: mkfifo(%s) successful", pipePath);
+		}
 
     #endif
+
 
     /* get metatile file from S3 */
 
@@ -991,40 +1085,7 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     store_s3_xyz_to_storagekey(store, xmlconfig, options, x, y, z, s3Path, PATH_MAX);
     struct s3_tile_request request = store_s3_get_tile_from_s3(ctx->ctx, s3Path, "store_s3_tile_stat");
     if(request.tile == NULL) {
-
-        #ifdef APACHE
-
-        /* metatile doesn't exists on S3, need to render it, 
-           grant permission for renderd to remove the semaphore after renderd wrote a metafile to S3 cache. */
-
-        struct semid_ds s_ds;
-
-        if(semctl(semId, 0,  IPC_STAT, &s_ds) == -1) {
-            log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: failed to get permissions of semaphore id=%d: %s", semId, strerror(errno));
-            return;
-        }
-
-        /* TODO: need to get a UID of RENDERD process without hard coding, proposals are as follows:
-           1. get from UNIX socket,
-           2. pass as a configuration parameter,
-           3. find renderd process,
-           4. others? */
-        #define RENDERD_USER_NAME "osm"
-
-        uid_t old_uid = s_ds.sem_perm.uid;
-        struct passwd* pwd;
-        pwd = getpwnam(RENDERD_USER_NAME);
-        s_ds.sem_perm.uid = pwd->pw_uid;
-
-        if(semctl(semId, 0,  IPC_SET, &s_ds) == -1) {
-            log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: failed to set permissions of semaphore id=%d: %s", semId, strerror(errno));
-            return;
-        } else {
-            log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: changed owner of semaphore id=%d: from uid=%d to uid=%d", semId, old_uid, s_ds.sem_perm.uid);
-        }
-
-        #endif
-
+        /* metatile doesn't exists on S3, need to render it */
         return;
     }
 
@@ -1046,14 +1107,10 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
 
     #ifdef APACHE
 
-    /* remove semaphore to inform other apache processes that metatile is in cache now */
+    /* inform other apache processes that metatile is in cache now */
 
-    if(semctl(semId, 0, IPC_RMID) == -1) {
-        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #2 failed to remove semaphore id=%d: %s", semId, strerror(errno));
-        return;
-    } else {
-        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: semaphore id=%d removed", semId);
-    }
+    store_s3_pipe_hup(pipePath);
+    store_s3_pipe_remove(pipePath);
 
     #endif
 }
@@ -1117,6 +1174,7 @@ static struct stat_info store_s3_tile_stat(struct storage_backend *store, const 
     tile_stat.atime = 0;
     tile_stat.ctime = 0;
     tile_stat.origin = unknow;
+    tile_stat.aborted = 0;
 
     const char* cachePath = ((struct store_s3_ctx*)store->storage_ctx)->s3Cache.path;
 
@@ -1152,22 +1210,14 @@ static int store_s3_metatile_write_with_cache(struct storage_backend *store, con
 
     store_s3_save_tile_to_cache(buf, sz, cachePath, "store_s3_metatile_write");
 
-    /* remove semaphore to inform apache processes that metatile is in S3 cache now */
-    /* TODO: determine an impact on other tools like: render_list, render_expired, etc. */
+    /* inform apache processes that metatile is in S3 cache now */
 
     #ifdef RENDERD
 
-    key_t key = createSemaphoreKey(cachePath);
-    long semId = semget(key, 1, S_IRUSR);
-    if(semId == -1) {
-        log_message(STORE_LOGLVL_ERR, "store_s3_metatile_write: failed to get semaphore for key=%d: %s", key, strerror(errno));
-    } else {
-        if(semctl(semId, 0, IPC_RMID) == -1) {
-            log_message(STORE_LOGLVL_ERR, "store_s3_metatile_write: failed to remove semaphore id=%d: %s", semId, strerror(errno));
-        } else {
-            log_message(STORE_LOGLVL_DEBUG, "store_s3_metatile_write: semaphore id=%d removed", semId);
-        }
-    }
+    	char pipePath[PATH_MAX];
+    	store_s3_pipe_path(pipePath, PATH_MAX, cachePath);
+    	store_s3_pipe_hup(pipePath);
+    	store_s3_pipe_remove(pipePath);
 
     #endif
 
@@ -1671,6 +1721,9 @@ struct storage_backend* init_storage_s3(const char *connection_string)
     store->metatile_expire = &store_s3_metatile_expire;
     store->tile_storage_id = &store_s3_tile_storage_id;
     store->close_storage = &store_s3_close_storage;
+	#if defined APACHE || defined RENDERD
+    	store->tile_cancel = &store_s3_tile_cancel;
+    #endif
 
     return store;
 #endif

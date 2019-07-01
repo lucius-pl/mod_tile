@@ -218,6 +218,7 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
     ap_conf_vector_t *sconf = r->server->module_config;
     tile_server_conf *scfg = ap_get_module_config(sconf, &tile_module);
     apr_os_sock_t *rs = (apr_os_sock_t*)ap_get_module_config(r->connection->conn_config, &tile_module);
+    struct tile_request_data * rdata = (struct tile_request_data *)ap_get_module_config(r->request_config, &tile_module);
 
 
 
@@ -326,6 +327,7 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
 
                         	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: request canceled: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
                         	close(fd);
+                        	rdata->store->tile_cancel(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z);
                         	return reqAbort;
 
                         } else if(resp.cmd == cmdCancelNotDone) {
@@ -346,8 +348,8 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
                     }
 
                 } else if( tpoll[1].revents & POLLRDHUP ) {
-                	cmd->cmd = cmdCancel;
                 	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: peer closed connection, sending a cancellation request to render: xml(%s) z(%d) x(%d) y(%d)", cmd->xmlname, cmd->z, cmd->x, cmd->y);
+                	cmd->cmd = cmdCancel;
                 	size = 1;
                 	if(send(fd, cmd, sizeof(struct protocol_v2), 0) == -1) {
                 		ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering request cancellation failed: %s", strerror(errno));
@@ -442,11 +444,17 @@ static enum tileState tile_state(request_rec *r, struct protocol *cmd, tile_orig
 {
     ap_conf_vector_t *sconf = r->server->module_config;
     tile_server_conf *scfg = ap_get_module_config(sconf, &tile_module);
-
-    struct stat_info stat;
     struct tile_request_data * rdata = (struct tile_request_data *)ap_get_module_config(r->request_config, &tile_module);
 
-    stat = rdata->store->tile_stat(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z);
+    rdata->store->socket = *(apr_os_sock_t*)ap_get_module_config(r->connection->conn_config, &tile_module);
+    rdata->store->timeout = scfg->request_timeout_priority * 1000;
+
+    struct stat_info stat = rdata->store->tile_stat(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z);
+
+    if(stat.aborted) {
+    	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "tile_state: aborted determining state of %s %i %i %i on store %pp", cmd->xmlname, cmd->x, cmd->y, cmd->z, rdata->store);
+    	return tileAborted;
+    }
 
     ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "tile_state: determined state of %s %i %i %i on store %pp: Tile size: %li, expired: %i created: %li, origin: %s",
                       cmd->xmlname, cmd->x, cmd->y, cmd->z, rdata->store, stat.size, stat.expired, stat.mtime, tile_origin_name(stat.origin));
@@ -988,6 +996,8 @@ static int tile_storage_hook(request_rec *r)
     }
 
     switch (state) {
+    	case tileAborted:
+    		return HTTP_NOT_FOUND;
         case tileCurrent:
             if (!incFreshCounter(FRESH, r)) {
                 ap_log_rerror(APLOG_MARK, APLOG_WARNING, 0, r,
