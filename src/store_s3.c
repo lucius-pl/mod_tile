@@ -30,6 +30,8 @@
 
 #ifdef HAVE_LIBDSAA
 #include <libdsaa.h>
+#include <sys/inotify.h>
+#define INOTIFY_BUF_LEN sizeof(struct inotify_event) + NAME_MAX + 1
 #endif
 
 #include "store.h"
@@ -54,6 +56,7 @@ typedef struct s3_storage_cache {
     int fileCount;
     int dirCount;
     long int size;
+    int inotify_d;
     #endif
     char *path;
     char *sizeUnit;
@@ -85,14 +88,6 @@ struct store_s3_ctx {
 /*****************************************************************************/
 
 #ifdef HAVE_LIBDSAA
-
-#define MESSAGE_QUEUE_KEY 1975
-
-struct msg_que_data {
-   long mtype;
-   char mtext[PATH_MAX];
-};
-
 #ifdef RENDERD
 
 static pthread_mutex_t cache_cleaner_lock;
@@ -104,6 +99,8 @@ struct list_data {
     char path[PATH_MAX];
     time_t atime;
     off_t size;
+    int watch_d;
+    struct list_data *parent;
 };
 
 /*****************************************************************************/
@@ -125,16 +122,15 @@ int s3_cache_list_compare_item(void* v1, void* v2) {
 
 void s3_cache_list_print_item(int i, void* v) {
     struct list_data *d = (struct list_data*)v;
-    log_message(STORE_LOGLVL_DEBUG, "%d path=%s size=%ld atime=%ld", i, d->path, d->size, d->atime);
+    syslog(LOG_DEBUG, "%d path=%s watch_d=%d parent_watch_d=%d size=%ld atime=%ld", i, d->path, d->watch_d, d->parent != NULL ? d->parent->watch_d : 0, d->size, d->atime);
 }
 
 /*****************************************************************************/
 
 int s3_cache_list_find_item(void* v1, void* v2) {
     struct list_data *d = (struct list_data*)v1;
-    char* path = (char*)v2;
-
-    return strcmp(d->path, path) == 0 ? 1 : 0;
+	int watch_d = *(int*)v2;
+    return d->watch_d == watch_d ? 1 : 0;
 }
 
 /*****************************************************************************/
@@ -154,53 +150,68 @@ void s3_cache_list_release_item(void* v) {
 
 /*****************************************************************************/
 
-int s3_cache_add_dir(char* path, S3Cache *s3Cache) {
+int s3_cache_add_dir(char* path, S3Cache *s3Cache, struct list_data **ld, struct list_data *ldp) {
     struct stat fs;
-    struct list_data *ld;
+    int watch_d;
 
     if(stat(path, &fs) != 0) {
         log_message(STORE_LOGLVL_ERR, "s3_cache_add_dir: error to stat dir: %s %d %s", path, errno, strerror(errno));
         return -1;
     }
 
-    ld = malloc(sizeof(struct list_data));
-    if(ld == NULL) {
-        log_message(STORE_LOGLVL_ERR, "s3_cache_add_dir: error to allocate memory: %d %s", errno, strerror(errno));
+	if((watch_d = inotify_add_watch(s3Cache->inotify_d, path, IN_CREATE | IN_DELETE_SELF )) == -1) {
+		syslog(LOG_ERR, "s3_cache_add_dir: inotify_add_watch(%s) error(%d) %s", path, errno, strerror(errno) );
+	    return -1;
+	}
+
+    *ld = malloc(sizeof(struct list_data));
+    if(*ld == NULL) {
+        syslog(LOG_ERR, "s3_cache_add_dir: error to allocate memory: %d %s", errno, strerror(errno));
         return -1;
     }
 
-    strncpy(ld->path, path, PATH_MAX);
-    ld->size = fs.st_size;
-    ld->atime = ((struct timespec)fs.st_atim).tv_sec;
+    strncpy((*ld)->path, path, PATH_MAX);
+    (*ld)->size = fs.st_size;
+    (*ld)->atime = ((struct timespec)fs.st_atim).tv_sec;
+    (*ld)->watch_d = watch_d;
+    (*ld)->parent = ldp;
 
     s3Cache->dirSize +=  fs.st_size;
     s3Cache->dirCount++;
 
-    list_add(&s3Cache->dirList, ld);
+    list_add(&s3Cache->dirList, *ld);
 
     return 0;
 }
 
 /*****************************************************************************/
 
-int s3_cache_add_file(char* path, S3Cache *s3Cache, list_add_mode mode) {
-    struct stat fs;
-    struct list_data *ld;
+int s3_cache_add_file(char* path, S3Cache *s3Cache, list_add_mode mode, struct list_data *ldp) {
+	struct stat fs;
+	int watch_d;
+	struct list_data *ld;
 
     if(stat(path, &fs) != 0) {
-        log_message(STORE_LOGLVL_ERR, "s3_cache_add_file: error to stat file: %s %d %s", path, errno, strerror(errno));
+        syslog(LOG_ERR, "s3_cache_add_file: stat(%s) error: %s %d %s", path, errno, strerror(errno));
         return -1;
     }
 
+	if((watch_d = inotify_add_watch(s3Cache->inotify_d, path, IN_ACCESS | IN_CLOSE_WRITE | IN_DELETE_SELF )) == -1) {
+		syslog(LOG_ERR,"s3_cache_add_file: inotify_add_watch(%s) error %d %s", path, errno, strerror(errno) );
+		return -1;
+	}
+
     ld = malloc(sizeof(struct list_data));
     if(ld == NULL) {
-        log_message(STORE_LOGLVL_ERR, "s3_cache_add_file: error to allocate memory: %d %s", errno, strerror(errno));
+        syslog(LOG_ERR, "s3_cache_add_file: error to allocate memory: %d %s", errno, strerror(errno));
         return -1;
     }
 
     strncpy(ld->path, path, PATH_MAX);
     ld->atime = ((struct timespec)fs.st_atim).tv_sec;
     ld->size = fs.st_size;
+	ld->watch_d = watch_d;
+	ld->parent = ldp;
 
     if(mode == SORT) {
         list_add_sort(&s3Cache->fileList, ld);
@@ -216,17 +227,17 @@ int s3_cache_add_file(char* path, S3Cache *s3Cache, list_add_mode mode) {
 
 /*****************************************************************************/
 
-int s3_cache_read_dir(char* name, S3Cache *s3Cache) {
+int s3_cache_read_dir(char* name, S3Cache *s3Cache, struct list_data *pld) {
     DIR *dir;
     struct dirent *file;
     char path[PATH_MAX];
     int r = 0;
-    list_add_mode mode = SORT;
+    struct list_data *ld;
 
-    r = s3_cache_add_dir(name, s3Cache);
+    r = s3_cache_add_dir(name, s3Cache, &ld, pld);
 
     if((dir = opendir(name)) == NULL) {
-        log_message(STORE_LOGLVL_ERR, "tile_cache_read_dir: error to open dir: %s %d %s", name, errno, strerror(errno));
+        syslog(LOG_ERR, "tile_cache_read_dir: opendir(%s) error(%d) %s", name, errno, strerror(errno));
         return -1;
     }
 
@@ -237,9 +248,9 @@ int s3_cache_read_dir(char* name, S3Cache *s3Cache) {
 
         snprintf(path, PATH_MAX, "%s/%s", name, file->d_name);
         if(file->d_type == DT_REG) {
-            r = s3_cache_add_file(path, s3Cache, mode);
+            r = s3_cache_add_file(path, s3Cache, SORT, ld);
         } else if(file->d_type == DT_DIR) {
-            r = s3_cache_read_dir(path, s3Cache);
+            r = s3_cache_read_dir(path, s3Cache, ld);
         }
     }
     closedir(dir);
@@ -265,36 +276,85 @@ void s3_cache_print(S3Cache* s3Cache) {
 
 /*****************************************************************************/
 
-int s3_cache_update_file(S3Cache *s3Cache, char* path) {
-    struct stat fs;
-    list_item_position p = list_item_last;
+int s3_cache_update_file_size(S3Cache *s3Cache, struct list_data *ld) {
+	struct stat fs;
 
-    if(stat(path, &fs) != 0) {
-        log_message(STORE_LOGLVL_ERR, "tile_cache_update_file: error to stat file: %s %d %s", path, errno, strerror(errno));
-        return -1;
-    }
+	if(stat(ld->path, &fs) != 0) {
+        syslog(LOG_ERR, "s3_cache_update_file_size: stat(%s) error(%d) %s", ld->path, errno, strerror(errno));
+		return -1;
+	}
 
-    time_t atime = ((struct timespec)fs.st_atim).tv_sec;
-    list_move(&s3Cache->fileList, path, p, &atime, NULL);
+	if(ld->size != fs.st_size) {
+		s3Cache->fileSize -= ld->size;
+		s3Cache->fileSize += fs.st_size;
+		ld->size = fs.st_size;
+		syslog(LOG_DEBUG, "s3_cache_update_file_size: file(%s) size(%d) updated.", ld->path, ld->size);
+	}
+
+	return 0;
+}
+
+/*****************************************************************************/
+
+int s3_cache_update_file_atime(S3Cache *s3Cache, struct list_data *ld) {
+	struct stat fs;
+	list_item_position p = list_item_last;
+
+	if(stat(ld->path, &fs) != 0) {
+        syslog(LOG_ERR, "s3_cache_update_file_atime: stat(%s) error(%d) %s", ld->path, errno, strerror(errno));
+		return -1;
+	}
+
+	time_t atime = ((struct timespec)fs.st_atim).tv_sec;
+	if(ld->atime < atime) {
+	    list_move(&s3Cache->fileList, &ld->watch_d, p, &atime, NULL);
+	    syslog(LOG_DEBUG, "s3_cache_update_file_atime: file(%s) access time(%d) updated.", ld->path, ld->atime);
+	}
+
+	return 0;
+}
+
+/*****************************************************************************/
+
+int s3_cache_remove_file(S3Cache *s3Cache, struct list_data *ld) {
+
+    s3Cache->fileSize -= ld->size;
+    s3Cache->fileCount--;
+
+    syslog(LOG_DEBUG, "Deleted file from S3 cache: %s", ld->path);
+
+    list_remove_find(&s3Cache->fileList, &ld->watch_d);
 
     return 0;
 }
 
 /*****************************************************************************/
 
-int s3_cache_remove_dir(S3Cache *s3Cache, char* path) {
+int s3_cache_remove_dir(S3Cache *s3Cache, struct list_data *ld) {
+
+    s3Cache->dirSize -= ld->size;
+    s3Cache->dirCount--;
+
+    log_message(STORE_LOGLVL_DEBUG, "Deleted dir: %s", ld->path);
+
+    list_remove_find(&s3Cache->dirList, &ld->watch_d);
+
+    return 0;
+}
+
+/*****************************************************************************/
+
+int s3_cache_remove_empty_dir(S3Cache *s3Cache, struct list_data *ld) {
     DIR *dir;
     struct dirent *file;
-    struct list_data *ld;
     int i = 0;
-    char* dirPath = dirname(path);
 
-    if(! strcmp(dirPath, s3Cache->path)) {
+    if(! strcmp(ld->path, s3Cache->path)) {
         return 0;
     }
 
-    if((dir = opendir(dirPath)) == NULL) {
-        log_message(STORE_LOGLVL_ERR, "s3_cache_remove_dir: error to open dir: %s %d %s", ld->path, errno, strerror(errno));
+    if((dir = opendir(ld->path)) == NULL) {
+        syslog(LOG_ERR, "s3_cache_remove_dir: opendir(%s) error(%d) %s", ld->path, errno, strerror(errno));
         return -1;
     }
 
@@ -305,26 +365,25 @@ int s3_cache_remove_dir(S3Cache *s3Cache, char* path) {
     }
     closedir(dir);
 
-    log_message(STORE_LOGLVL_DEBUG, "Files in dir: %s=%d", dirPath, i);
+    syslog(LOG_DEBUG, "Files %d in dir %s", i, ld->path);
 
     if(i > 0) {
         return 0;
     }
 
-    if(rmdir(dirPath) == -1) {
-        log_message(STORE_LOGLVL_ERR, "s3_cache_remove_dir: error to remove dir: %s %d %s", ld->path, errno, strerror(errno));
+    if(inotify_rm_watch(s3Cache->inotify_d, ld->watch_d) == -1) {
+    	syslog(LOG_ERR, "s3_cache_reduce_size: inotify_rm_watch(%d) error(%d) %s", ld->watch_d, errno, strerror(errno));
+    	return -1;
+    }
+
+    if(rmdir(ld->path) == -1) {
+        log_message(STORE_LOGLVL_ERR, "s3_cache_remove_dir: rmdir(%s) error(%d) %s", ld->path, errno, strerror(errno));
         return -1;
     }
 
-    list_get_find(&s3Cache->dirList, dirPath, (void**)&ld);
-    s3Cache->dirSize -= ld->size;
-    s3Cache->dirCount--;
+    s3_cache_remove_dir(s3Cache, ld);
 
-    log_message(STORE_LOGLVL_DEBUG, "Deleted dir: %s", ld->path);
-
-    list_remove_find(&s3Cache->dirList, ld->path);
-
-    s3_cache_remove_dir(s3Cache, dirPath);
+    s3_cache_remove_empty_dir(s3Cache, ld->parent);
 
     return 1;
 }
@@ -332,27 +391,31 @@ int s3_cache_remove_dir(S3Cache *s3Cache, char* path) {
 /*****************************************************************************/
 
 int s3_cache_reduce_size(S3Cache *s3Cache) {
-
-    list_item_position p = list_item_first;
     struct list_data *ld;
 
     if(s3Cache->fileSize + s3Cache->dirSize <= s3Cache->size) {
         return 0;
     }
 
-    log_message(STORE_LOGLVL_INFO, "Reducing tile cache size is needed: %ld > %ld", s3Cache->fileSize + s3Cache->dirSize,  s3Cache->size);
+    syslog(LOG_INFO, "Reducing tile cache size is needed: %ld > %ld", s3Cache->fileSize + s3Cache->dirSize,  s3Cache->size);
 
     while(s3Cache->fileSize + s3Cache->dirSize > s3Cache->size) {
-        list_get(&s3Cache->fileList, p, (void**)&ld);
-        if(unlink(ld->path) == -1) {
-            log_message(STORE_LOGLVL_ERR, "s3_cache_reduce_size: error to remove file: %s %d %s", ld->path, errno, strerror(errno));
+
+    	list_get(&s3Cache->fileList, list_item_first, (void**)&ld);
+
+        if(inotify_rm_watch(s3Cache->inotify_d, ld->watch_d) == -1) {
+        	syslog(LOG_ERR, "s3_cache_reduce_size: inotify_rm_watch(%d) error(%d) %s", ld->watch_d, errno, strerror(errno));
+        	return -1;
+        }
+
+    	if(unlink(ld->path) == -1) {
+            syslog(LOG_ERR, "s3_cache_reduce_size: unlink(%s) error(%d) %s", ld->path, errno, strerror(errno));
             return -1;
         }
-        s3Cache->fileSize -= ld->size;
-        s3Cache->fileCount--;
-        log_message(STORE_LOGLVL_DEBUG, "Deleted file from S3 cache: %s", ld->path);
-        s3_cache_remove_dir(s3Cache, ld->path);
-        list_remove(&s3Cache->fileList, p);
+
+    	s3_cache_remove_file(s3Cache, ld);
+    	s3_cache_remove_empty_dir(s3Cache, ld->parent);
+
     }
 
     return 1;
@@ -361,48 +424,84 @@ int s3_cache_reduce_size(S3Cache *s3Cache) {
 /*****************************************************************************/
 
 int s3_cache_process_event(S3Cache *s3Cache) {
-    char path[PATH_MAX];
-    struct list_data *ld;
-    list_add_mode mode = LAST;
-    int msqid;
-    struct msg_que_data msqdata;
+	struct inotify_event *ie;
+	char path[PATH_MAX];
+	struct list_data *ld;
+	char buf[INOTIFY_BUF_LEN] __attribute__ ((aligned(8)));
+	char *p;
+	ssize_t len;
 
-    if((msqid = msgget(MESSAGE_QUEUE_KEY, IPC_CREAT | S_IRUSR | S_IWUSR | S_IWGRP)) == -1) {
-        log_message(STORE_LOGLVL_ERR, "store_s3_cache_recive_msg: failed to create meesage queue for key=%d: %s", MESSAGE_QUEUE_KEY, strerror(errno));
-        return -1;
-    }
+	while(1) {
 
-    while(1) {
-        if(msgrcv(msqid, &msqdata, sizeof(msqdata.mtext), 0, 0) > 0) {
-            log_message(STORE_LOGLVL_DEBUG, "recived meesage from queue id=%d: mtype=%ld mtext=%s", msqid, msqdata.mtype, msqdata.mtext);
-            char* path = msqdata.mtext;
+		if((len = read(s3Cache->inotify_d, buf, INOTIFY_BUF_LEN)) > 0 ) {
+			for (p = buf; p < buf + len; p += sizeof(struct inotify_event) + ie->len) {
 
-            switch(msqdata.mtype) {
-                case CREATE_DIR:
-                    s3_cache_add_dir(path, s3Cache);
-                    s3_cache_print(s3Cache);
-                    break;
-                case CREATE_FILE:
-                    s3_cache_add_file(path, s3Cache, mode);
-                    s3_cache_print(s3Cache);
-                    if(s3_cache_reduce_size(s3Cache)) {
-                    	s3_cache_print(s3Cache);
-                    }
-                    break;
-                case READ:
-                    s3_cache_update_file(s3Cache, path);
-                    s3_cache_print(s3Cache);
-                    break;
-            }
-        }
-    }
+		        ie = (struct inotify_event *) p;
 
-    if(msgctl(msqid, IPC_RMID, 0) == -1) {
-        log_message(STORE_LOGLVL_ERR, "store_s3_cache_recive_msg: failed to remove meesage queue id=%d: %s", msqid, strerror(errno));
-        return -1;
-    }
+			    syslog(LOG_DEBUG, "inotify event: mask=%x len=%d name=%s wd=%d\n", ie->mask, ie->len, ie->len > 0 ? ie->name : "", ie->wd);
 
-    return 0;
+				if(ie->mask & IN_CREATE) {
+
+					if(list_get_find(&s3Cache->dirList, &ie->wd, (void**)&ld)) {
+
+				    	snprintf(path, PATH_MAX, "%s/%s", ld->path, ie->name);
+
+						syslog(LOG_DEBUG, "IN_CREATE: %s", path);
+
+						if(ie->mask & IN_ISDIR ) {
+							s3_cache_read_dir(path, s3Cache, ld);
+						} else {
+							s3_cache_add_file(path, s3Cache, LAST, ld);
+						}
+
+						s3_cache_print(s3Cache);
+						if(s3_cache_reduce_size(s3Cache)) {
+							s3_cache_print(s3Cache);
+						}
+					}
+
+
+				} else if (ie->mask & IN_CLOSE_WRITE) {
+
+					if(list_get_find(&s3Cache->fileList, &ie->wd, (void**)&ld)) {
+
+						syslog(LOG_DEBUG, "IN_CLOSE_WRITE %s", ld->path);
+						s3_cache_update_file_size(s3Cache, ld);
+						s3_cache_print(s3Cache);
+
+						if(s3_cache_reduce_size(s3Cache)) {
+							s3_cache_print(s3Cache);
+						}
+					 }
+
+				} else if (ie->mask & IN_ACCESS) {
+
+					if(list_get_find(&s3Cache->fileList, &ie->wd, (void**)&ld)) {
+						syslog(LOG_DEBUG, "IN_ACCESS %s", ld->path);
+		                s3_cache_update_file_atime(s3Cache, ld);
+						s3_cache_print(s3Cache);
+					}
+
+				} else if (ie->mask & IN_DELETE_SELF) {
+
+					if(list_get_find(&s3Cache->fileList, &ie->wd, (void**)&ld)) {
+
+						syslog(LOG_DEBUG, "IN_DELETE_SELF %s", ld->path);
+						s3_cache_remove_file(s3Cache, ld);
+						s3_cache_print(s3Cache);
+
+					} else if(list_get_find(&s3Cache->dirList, &ie->wd, (void**)&ld)) {
+
+						syslog(LOG_DEBUG, "IN_DELETE_SELF %s", ld->path);
+						s3_cache_remove_dir(s3Cache, ld);
+						s3_cache_print(s3Cache);
+					}
+				}
+			}
+		}
+	}
+
+	return 0;
 }
 
 /*****************************************************************************/
@@ -454,11 +553,13 @@ static void* exec_cache_cleaner_thread(void* v) {
     #ifdef DEBUG
     list_debug(1);
     #endif
+
     list_init(&s3Cache.fileList, &listFun);
     list_init(&s3Cache.dirList,  &listFun);
 
+    s3Cache.inotify_d = inotify_init();
 
-    if(s3_cache_read_dir(s3Cache.path, &s3Cache) == -1) {
+    if(s3_cache_read_dir(s3Cache.path, &s3Cache, NULL) == -1) {
         log_message(STORE_LOGLVL_ERR, "exec_cache_cleaner_thread: error reading tile cache directory: %s", s3Cache.path);
     }
 
@@ -471,6 +572,8 @@ static void* exec_cache_cleaner_thread(void* v) {
 
     list_release(&s3Cache.fileList);
     list_release(&s3Cache.dirList);
+
+    close(s3Cache.inotify_d);
 
     return 0;
 }
@@ -595,35 +698,6 @@ static struct s3_tile_request store_s3_get_tile_from_s3(S3BucketContext* ctx, co
 
 /*****************************************************************************/
 
-#ifdef HAVE_LIBDSAA
-
-extern int store_s3_cache_send_msg(char* path, MsgQueType msqtype) {
-    int msqid;
-    struct msg_que_data msqdata;
-
-
-    if((msqid = msgget(MESSAGE_QUEUE_KEY, 0)) == -1) {
-        log_message(STORE_LOGLVL_ERR, "store_s3_cache_send_msg: failed to get meesage queue id for key=%d: %s", MESSAGE_QUEUE_KEY, strerror(errno));
-        return -1;
-    }
-
-    msqdata.mtype = msqtype;
-    strncpy(msqdata.mtext, path, PATH_MAX);
-
-    if(msgsnd(msqid, &msqdata, sizeof(msqdata.mtext),  IPC_NOWAIT ) == -1) {
-        log_message(STORE_LOGLVL_ERR, "store_s3_cache_send_msg: failed to send meesage to queue id=%d: %s", msqid, strerror(errno));
-        return -1;
-    } else {
-        log_message(STORE_LOGLVL_DEBUG, "store_s3_cache_send_msg: sent meesage to queue id=%d: mtype=%ld mtext=%s", msqid, msqdata.mtype, msqdata.mtext);
-    }
-
-    return 0;
-}
-
-#endif
-
-/*****************************************************************************/
-
 static int store_s3_save_tile_to_cache(const char* metatile, size_t metatile_size, char* cachePath, const char* source) {
 
     mode_t pumask = umask(0);
@@ -654,16 +728,6 @@ static int store_s3_save_tile_to_cache(const char* metatile, size_t metatile_siz
     close(fd);
 
     log_message(STORE_LOGLVL_DEBUG, "%s: save metatile %s to S3 cache", source, cachePath);
-
-
-    #ifdef HAVE_LIBDSAA
-
-    /* inform cleaner about a new file in S3 cache */
-
-    MsgQueType msqtype = CREATE_FILE;
-    store_s3_cache_send_msg(cachePath, msqtype);
-
-    #endif
 
     return 0;
 }
@@ -734,15 +798,6 @@ static int store_s3_tile_read_with_cache(struct storage_backend *store, const ch
         }
         close(fd);
         log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_read: retrieved metatile from cache: %s", path);
-
-        #ifdef HAVE_LIBDSAA
-
-        /* inform cleaner about reading a file from S3 cache */
-
-        MsgQueType msqtype = READ;
-        store_s3_cache_send_msg(path, msqtype);
-
-        #endif
     }
 
     /* extract tile from metatile */
