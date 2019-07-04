@@ -320,6 +320,7 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
                         if (resp.cmd == cmdDone) {
 
                         	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: rendering successfully: state(%d) xml(%s) z(%d) x(%d) y(%d)", resp.cmd, resp.xmlname, resp.z, resp.x, resp.y);
+                        	add_response_header(r, TILE_ORIGIN_HTTP_HEADER_NAME, tile_origin_name(renderd));
                         	close(fd);
                         	return reqOK;
 
