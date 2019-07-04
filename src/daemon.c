@@ -51,8 +51,9 @@ static renderd_config config;
 int noSlaveRenders;
 
 #define LOG_LEVEL_DEFAULT "info"
+#define LOG_FACILITY_DEFAULT "daemon"
 
-static const char *cmdStr(enum protoCmd c)
+const char *cmdStr(enum protoCmd c)
 {
     switch (c) {
         case cmdIgnore:  return "Ignore";
@@ -63,6 +64,9 @@ static const char *cmdStr(enum protoCmd c)
         case cmdDirty:   return "Dirty";
         case cmdDone:    return "Done";
         case cmdNotDone: return "NotDone";
+        case cmdCancel:	 return "Cancel";
+        case cmdCancelDone:	 	return "CancelDone";
+        case cmdCancelNotDone:	 return "CancelNotDone";
         default:         return "unknown";
     }
 }
@@ -74,11 +78,14 @@ void send_response(struct item *item, enum protoCmd rsp, int render_time) {
     struct protocol *req = &item->req;
     struct item *prev;
 
-    request_queue_remove_request(render_request_queue, item, render_time);
+    //a canceled request is already removed
+    if(render_time != 0) {
+    	request_queue_remove_request(render_request_queue, item, render_time);
+    }
 
     while (item) {
         req = &item->req;
-        if ((item->fd != FD_INVALID) && ((req->cmd == cmdRender) || (req->cmd == cmdRenderPrio) || (req->cmd == cmdRenderBulk))) {
+        if ((item->fd != FD_INVALID) && ((req->cmd == cmdRender) || (req->cmd == cmdRenderPrio) || (req->cmd == cmdRenderBulk) || (req->cmd == cmdCancel))) {
             req->cmd = rsp;
             //fprintf(stderr, "Sending message %s to %d\n", cmdStr(rsp), item->fd);
             
@@ -93,7 +100,7 @@ void send_response(struct item *item, enum protoCmd rsp, int render_time) {
 
 enum protoCmd rx_request(struct protocol *req, int fd)
 {
-    struct item  *item;
+    struct item  *item, *request;
 
     // Upgrade version 1 and 2 to  version 3
     if (req->ver == 1) {
@@ -110,7 +117,7 @@ enum protoCmd rx_request(struct protocol *req, int fd)
     syslog(LOG_DEBUG, "DEBUG: Got command %s fd(%d) xml(%s), z(%d), x(%d), y(%d), mime(%s), options(%s)",
            cmdStr(req->cmd), fd, req->xmlname, req->z, req->x, req->y, req->mimetype, req->options);
 
-    if ((req->cmd != cmdRender) && (req->cmd != cmdRenderPrio) && (req->cmd != cmdRenderLow) && (req->cmd != cmdDirty) && (req->cmd != cmdRenderBulk)) {
+    if ((req->cmd != cmdRender) && (req->cmd != cmdRenderPrio) && (req->cmd != cmdRenderLow) && (req->cmd != cmdDirty) && (req->cmd != cmdRenderBulk) && (req->cmd != cmdCancel)) {
         syslog(LOG_WARNING, "WARNING: Ignoring unknown command %s fd(%d) xml(%s), z(%d), x(%d), y(%d)",
                     cmdStr(req->cmd), fd, req->xmlname, req->z, req->x, req->y);
         return cmdNotDone;
@@ -138,7 +145,24 @@ enum protoCmd rx_request(struct protocol *req, int fd)
     item->my = item->req.y;
 #endif
 
-    return request_queue_add_request(render_request_queue, item);
+    if(req->cmd == cmdCancel) {
+    	enum protoCmd ret = cmdCancelDone;
+    	request = request_queue_remove_canceled_request(render_request_queue, item);
+    	if(request) {
+    		syslog(LOG_DEBUG, "DEBUG: remove request from inQueue(%d): fd(%d) z(%d) x(%d) y(%d)", request->inQueue, request->fd, request->req.z, request->req.x, request->req.y);
+    		send_response(request, ret, 0);
+    	} else {
+       		syslog(LOG_DEBUG, "DEBUG: skipped cancel request, not found or rendering already: fd(%d) z(%d) x(%d) y(%d)", item->fd, item->req.z, item->req.x, item->req.y);
+       		ret = cmdCancelNotDone;
+    	}
+    	free(item);
+    	return ret;
+
+    } else {
+
+    	syslog(LOG_DEBUG, "DEBUG: add_request_to_queue: fd(%d) z(%d) x(%d) y(%d), ", item->fd, item->req.z, item->req.x, item->req.y);
+    	return request_queue_add_request(render_request_queue, item);
+    }
 }
 
 void request_exit(void)
@@ -229,12 +253,12 @@ void process_loop(int listen_fd)
                         request_queue_clear_requests_by_fd(render_request_queue, fd);
                         close(fd);
                     } else  {
-                        enum protoCmd rsp = rx_request(&cmd, fd);
-                            
-                        if (rsp == cmdNotDone) {
-                            cmd.cmd = rsp;
-                            syslog(LOG_DEBUG, "DEBUG: Sending NotDone response(%d)\n", rsp);
-                            ret = send_cmd(&cmd, fd);
+
+                    	enum protoCmd rsp = rx_request(&cmd, fd);
+                        if (rsp == cmdNotDone || rsp == cmdCancelNotDone) {
+                        	cmd.cmd = rsp;
+                        	syslog(LOG_DEBUG, "DEBUG: Sending %s(%d) response", cmdStr(rsp), rsp);
+                        	ret = send_cmd(&cmd, fd);
                         }
                     }
                 }
@@ -290,6 +314,7 @@ void *stats_writeout_thread(void * arg) {
             fprintf(statfile, "ReqBulkQueueLength: %i\n", reqBulkQueueLength);
             fprintf(statfile, "DirtQueueLength: %i\n", dirtQueueLength);
             fprintf(statfile, "DropedRequest: %li\n", lStats.noReqDroped);
+            fprintf(statfile, "CanceledRequest: %li\n", lStats.noReqCanceled);
             fprintf(statfile, "ReqRendered: %li\n", lStats.noReqRender);
             fprintf(statfile, "TimeRendered: %li\n", lStats.timeReqRender);
             fprintf(statfile, "ReqPrioRendered: %li\n", lStats.noReqPrioRender);
@@ -623,9 +648,7 @@ void *slave_thread(void * arg) {
     return NULL;
 }
 
-/**
- * get log level value by name
- */
+/* get log level value by name */
 short get_log_level_value(const char* name) {
 
     for(int i=0; i<sizeof(prioritynames)/sizeof(prioritynames[0]) - 1; i++) {
@@ -636,14 +659,34 @@ short get_log_level_value(const char* name) {
     return -1;
 }
 
-/**
-  * get log level name by value
-  */
+/* get log level name by value */
 char* get_log_level_name(short value) {
 
     for(int i=0; i<sizeof(prioritynames)/sizeof(prioritynames[0]) - 1; i++) {
         if(value == prioritynames[i].c_val) {
             return prioritynames[i].c_name;
+        }
+    }
+    return NULL;
+}
+
+/* get log facility value by name */
+short get_log_facility_value(const char* name) {
+
+    for(int i=0; i<sizeof(facilitynames)/sizeof(facilitynames[0]) - 1; i++) {
+        if(strcasecmp(name, facilitynames[i].c_name) == 0) {
+            return facilitynames[i].c_val;
+        }
+    }
+    return -1;
+}
+
+/* get log facility name by value */
+char* get_log_facility_name(short value) {
+
+    for(int i=0; i<sizeof(facilitynames)/sizeof(facilitynames[0]) - 1; i++) {
+        if(value == facilitynames[i].c_val) {
+            return facilitynames[i].c_name;
         }
     }
     return NULL;
@@ -703,25 +746,6 @@ int main(int argc, char **argv)
         }
     }
 
-    log_options = LOG_PID;
-#ifdef LOG_PERROR
-    if (foreground)
-        log_options |= LOG_PERROR;
-#endif
-    openlog("renderd", log_options, LOG_DAEMON);
-
-    /*set default log level */
-    setlogmask(LOG_UPTO(get_log_level_value(LOG_LEVEL_DEFAULT)));
-
-    syslog(LOG_INFO, "Rendering daemon started");
-
-    render_request_queue = request_queue_init();
-    if (render_request_queue == NULL ) {
-        syslog(LOG_ERR, "Failed to initialise request queue");
-        exit(1);
-    }
-    syslog(LOG_INFO, "Initiating request_queue");
-
     xmlconfigitem maps[XMLCONFIGS_MAX];
     bzero(maps, sizeof(xmlconfigitem) * XMLCONFIGS_MAX);
 
@@ -740,7 +764,6 @@ int main(int argc, char **argv)
     char buffer[PATH_MAX];
     for (int section=0; section < iniparser_getnsec(ini); section++) {
         char *name = iniparser_getsecname(ini, section);
-        syslog(LOG_INFO, "Parsing section %s\n", name);
         if (strncmp(name, "renderd", 7) && strcmp(name, "mapnik")) {
             if (config.tile_dir == NULL) {
                 fprintf(stderr, "No valid (active) renderd config section available\n");
@@ -854,10 +877,8 @@ int main(int argc, char **argv)
             if (sscanf(name, "renderd%i", &render_sec) != 1) {
                 render_sec = 0;
             }
-            syslog(LOG_INFO, "Parsing render section %i\n", render_sec);
             if (render_sec >= MAX_SLAVES) {
-                syslog(LOG_ERR, "Can't handle more than %i render sections\n",
-                        MAX_SLAVES);
+                fprintf(stderr, "Can't handle more than %i render sections\n", MAX_SLAVES);
                 exit(7);
             }
             sprintf(buffer, "%s:socketname", name);
@@ -884,6 +905,16 @@ int main(int argc, char **argv)
             }
             config_slaves[render_sec].log_level = val_loglevel;
 
+            sprintf(buffer, "%s:log_facility", name);
+            char *ini_logfacility = iniparser_getstring(ini, buffer, (char *)LOG_FACILITY_DEFAULT);
+            short val_logfacility = get_log_facility_value(ini_logfacility);
+            if(val_logfacility == -1) {
+                fprintf(stderr, "log_facility = %s is incorrect. Should be one of: daemon, local0-7.\n", ini_logfacility);
+                exit(7);
+            }
+            config_slaves[render_sec].log_facility = val_logfacility;
+
+
             sprintf(buffer, "%s:stats_file", name);
             config_slaves[render_sec].stats_filename = iniparser_getstring(ini,
                     buffer, NULL);
@@ -895,6 +926,7 @@ int main(int argc, char **argv)
                 config.num_threads = config_slaves[render_sec].num_threads;
                 config.tile_dir = config_slaves[render_sec].tile_dir;
                 config.log_level = config_slaves[render_sec].log_level;
+                config.log_facility = config_slaves[render_sec].log_facility;
                 config.stats_filename
                         = config_slaves[render_sec].stats_filename;
                 config.mapnik_plugins_dir = iniparser_getstring(ini,
@@ -909,8 +941,17 @@ int main(int argc, char **argv)
         }
     }
 
+    log_options = LOG_PID;
+#ifdef LOG_PERROR
+    if (foreground)
+        log_options |= LOG_PERROR;
+#endif
+    openlog("renderd", log_options, config.log_facility);
+
     /*set log level */
     setlogmask(LOG_UPTO(config.log_level));
+
+    syslog(LOG_INFO, "Rendering daemon started");
 
     if (config.ipport > 0) {
         syslog(LOG_INFO, "config renderd: ip socket=%s:%i\n", config.iphostname, config.ipport);
@@ -923,6 +964,7 @@ int main(int argc, char **argv)
     }
 
     syslog(LOG_INFO, "config renderd: log_level=%s\n", get_log_level_name(config.log_level));
+    syslog(LOG_INFO, "config renderd: log_facility=%s\n", get_log_facility_name(config.log_facility));
     syslog(LOG_INFO, "config renderd: tile_dir=%s\n", config.tile_dir);
     syslog(LOG_INFO, "config renderd: stats_file=%s\n", config.stats_filename);
     syslog(LOG_INFO, "config mapnik:  plugins_dir=%s\n", config.mapnik_plugins_dir);
@@ -957,6 +999,13 @@ int main(int argc, char **argv)
                  maps[iconf].htcpip, maps[iconf].host);
         }
     }
+
+    render_request_queue = request_queue_init();
+    if (render_request_queue == NULL ) {
+        syslog(LOG_ERR, "Failed to initialise request queue");
+        exit(1);
+    }
+    syslog(LOG_INFO, "Initiating request_queue");
 
     fd = server_socket_init(&config);
 #if 0

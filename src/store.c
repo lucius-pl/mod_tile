@@ -122,6 +122,3 @@ char* tile_origin_name(tile_origin origin) {
     static char* origin_name[] = {"unknow", "renderd", "cache", "s3"};
     return origin_name[origin];
 }
-
-
-

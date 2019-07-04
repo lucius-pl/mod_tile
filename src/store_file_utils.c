@@ -10,12 +10,8 @@
 #include "render_config.h"
 #include "store_file.h"
 #include "store_file_utils.h"
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
-#if defined HAVE_LIBS3 && defined HAVE_LIBDSAA && (defined APACHE || defined RENDERD)
-#include "store_s3.h"
-#endif
+
+
 
 // Build parent directories for the specified file name
 // Note: the part following the trailing / is ignored
@@ -24,9 +20,6 @@ int mkdirp(const char *path) {
     struct stat s;
     char tmp[PATH_MAX];
     char *p;
-    #if defined HAVE_LIBS3 && defined HAVE_LIBDSAA && (defined APACHE || defined RENDERD)
-    MsgQueType msqtype = CREATE_DIR;
-    #endif
 
     strncpy(tmp, path, sizeof(tmp) - 1);
 
@@ -60,11 +53,6 @@ int mkdirp(const char *path) {
                        return 1;
                     }
             }
-            #if defined HAVE_LIBS3 && defined HAVE_LIBDSAA && (defined APACHE || defined RENDERD)
-             else {
-                 store_s3_cache_send_msg(tmp, msqtype);
-            }
-            #endif
             *p = '/';
         }
         p++;
