@@ -164,6 +164,12 @@ int s3_cache_add_dir(char* path, S3Cache *s3Cache, struct list_data **ld, struct
 	    return -1;
 	}
 
+	if(list_find(&s3Cache->dirList, &watch_d)) {
+		syslog(LOG_DEBUG,"s3_cache_add_dir: path=%s watch_d=%d is already on list, skipped", path, watch_d );
+		return -1;
+	}
+
+
     *ld = malloc(sizeof(struct list_data));
     if(*ld == NULL) {
         syslog(LOG_ERR, "s3_cache_add_dir: error to allocate memory: %d %s", errno, strerror(errno));
@@ -189,7 +195,7 @@ int s3_cache_add_dir(char* path, S3Cache *s3Cache, struct list_data **ld, struct
 int s3_cache_add_file(char* path, S3Cache *s3Cache, list_add_mode mode, struct list_data *ldp) {
 	struct stat fs;
 	int watch_d;
-	struct list_data *ld;
+	struct list_data *ld = NULL;
 
     if(stat(path, &fs) != 0) {
         syslog(LOG_ERR, "s3_cache_add_file: stat(%s) error: %s %d %s", path, errno, strerror(errno));
@@ -198,6 +204,11 @@ int s3_cache_add_file(char* path, S3Cache *s3Cache, list_add_mode mode, struct l
 
 	if((watch_d = inotify_add_watch(s3Cache->inotify_d, path, IN_ACCESS | IN_CLOSE_WRITE | IN_DELETE_SELF )) == -1) {
 		syslog(LOG_ERR,"s3_cache_add_file: inotify_add_watch(%s) error %d %s", path, errno, strerror(errno) );
+		return -1;
+	}
+
+	if(list_find(&s3Cache->fileList, &watch_d)) {
+		syslog(LOG_DEBUG,"s3_cache_add_file: path=%s watch_d=%d is already on list, skipped", path, watch_d );
 		return -1;
 	}
 
@@ -240,6 +251,7 @@ int s3_cache_read_dir(char* name, S3Cache *s3Cache, struct list_data *pld) {
         syslog(LOG_ERR, "tile_cache_read_dir: opendir(%s) error(%d) %s", name, errno, strerror(errno));
         return -1;
     }
+
 
     while ((file = readdir(dir)) != NULL) {
         if (!strcmp(file->d_name, ".") || !strcmp(file->d_name, "..") || !strcmp(file->d_name, "lost+found")) {
