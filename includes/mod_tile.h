@@ -37,6 +37,9 @@
 /* Name of HTTP header indicating the origin of a map tile */
 #define TILE_ORIGIN_HTTP_HEADER_NAME "X-Tile-Origin"
 
+/* Name of HTTP header with the system load average within minute */
+#define SYSTEM_LOAD_AVG_HTTP_HEADER_NAME "X-System-Load-Avg"
+
 
 typedef struct delaypool_entry {
 	struct in6_addr ip_addr;
@@ -124,6 +127,8 @@ typedef struct {
 	long delaypoolRenderRate;
     int bulkMode;
     int disableHttpCacheHeaders;
+    short sysloadavgheaderenable;
+    char sysloadavgheaderuseragent[DEFAULT_LIMIT_REQUEST_FIELDSIZE];
 } tile_server_conf;
 
 typedef struct tile_request_data {
