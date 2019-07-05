@@ -346,8 +346,9 @@ static reqTileState request_tile(request_rec *r, struct protocol *cmd, int rende
 
                 } else {
 
-                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: render poll response events: %d", tpoll[0].revents);
-                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: peer poll response events: %d", tpoll[1].revents);
+                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: render poll response events: %x", tpoll[0].revents);
+                	ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: peer poll response events: %x", tpoll[1].revents);
+                	break;
                 }
             }
         }
