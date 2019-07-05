@@ -126,6 +126,8 @@ typedef struct {
 	int delaypoolRenderSize;
 	long delaypoolRenderRate;
     int bulkMode;
+    short sysloadavgheaderenable;
+    char sysloadavgheaderuseragent[DEFAULT_LIMIT_REQUEST_FIELDSIZE];
 } tile_server_conf;
 
 typedef struct tile_request_data {

@@ -903,12 +903,20 @@ static int tile_storage_hook(request_rec *r)
     avg = get_load_avg();
     state = tile_state(r, cmd);
 
-    char buf[7];
-    snprintf(buf, sizeof(buf), "%.2f", avg);
-    add_http_header(r->headers_out, SYSTEM_LOAD_AVG_HTTP_HEADER_NAME, buf);
-
     sconf = r->server->module_config;
     scfg = ap_get_module_config(sconf, &tile_module);
+
+
+    if(scfg->sysloadavgheaderenable) {
+
+    	if(strlen(scfg->sysloadavgheaderuseragent) == 0 ||
+    		(strlen(scfg->sysloadavgheaderuseragent) > 0 && strcmp(scfg->sysloadavgheaderuseragent, apr_table_get(r->headers_in,"User-Agent")) == 0) ) {
+
+    		char buf[7];
+        	snprintf(buf, sizeof(buf), "%.2f", avg);
+        	add_http_header(r->headers_out, SYSTEM_LOAD_AVG_HTTP_HEADER_NAME, buf);
+    	}
+    }
 
     if (scfg->enableTileThrottling && !delay_allowed(r, state)) {
         if (!incRespCounter(HTTP_SERVICE_UNAVAILABLE, r, cmd, rdata->layerNumber)) {
@@ -2218,6 +2226,28 @@ static const char *mod_tile_delaypool_render_config(cmd_parms *cmd, void *mconfi
     return NULL;
 }
 
+
+static const char* mod_tile_sys_load_avg_header_enable_config(cmd_parms *cmd, void *mconfig, const char *enable, const char *userAgent) {
+
+	tile_server_conf *scfg = ap_get_module_config(cmd->server->module_config, &tile_module);
+
+	if(! strcmp(enable, "on")) {
+		scfg->sysloadavgheaderenable = 1;
+	} else if (! strcmp(enable, "off")) {
+		scfg->sysloadavgheaderenable = 0;
+	} else {
+		return "ModTileSysLoadAvgHeaderEnable <on|off> [User-Agent]";
+	}
+
+	if(userAgent != NULL) {
+		strncpy(scfg->sysloadavgheaderuseragent, userAgent, DEFAULT_LIMIT_REQUEST_FIELDSIZE - 1);
+	}
+
+	return NULL;
+
+}
+
+
 static void *create_tile_config(apr_pool_t *p, server_rec *s)
 {
     tile_server_conf * scfg = (tile_server_conf *) apr_pcalloc(p, sizeof(tile_server_conf));
@@ -2251,7 +2281,8 @@ static void *create_tile_config(apr_pool_t *p, server_rec *s)
     scfg->delaypoolRenderSize = AVAILABLE_RENDER_BUCKET_SIZE;
     scfg->delaypoolRenderRate = RENDER_TOPUP_RATE;
     scfg->bulkMode = 0;
-
+    scfg->sysloadavgheaderenable = 0;
+    strcpy(scfg->sysloadavgheaderuseragent, "");
 
     return scfg;
 }
@@ -2293,6 +2324,8 @@ static void *merge_tile_config(apr_pool_t *p, void *basev, void *overridesv)
     scfg->delaypoolRenderSize = scfg_over->delaypoolRenderSize;
     scfg->delaypoolRenderRate = scfg_over->delaypoolRenderRate;
     scfg->bulkMode = scfg_over->bulkMode;
+    scfg->sysloadavgheaderenable = scfg_over->sysloadavgheaderenable;
+    strncpy(scfg->sysloadavgheaderuseragent, scfg_over->sysloadavgheaderuseragent, DEFAULT_LIMIT_REQUEST_FIELDSIZE - 1);
 
     //Construct a table of minimum cache times per zoom level
     for (i = 0; i <= MAX_ZOOM_SERVER; i++) {
@@ -2484,6 +2517,13 @@ static const command_rec tile_cmds[] =
         NULL,                            /* argument to include in call */
         OR_OPTIONS,                      /* where available */
         "On Off - make all requests to renderd with bulk render priority, never mark tiles dirty"  /* directive description */
+    ),
+    AP_INIT_TAKE12(
+        "ModTileSysLoadAvgHeaderEnable",          	/* directive name */
+        mod_tile_sys_load_avg_header_enable_config, /* config action routine */
+        NULL,                                   	/* argument to include in call */
+        OR_OPTIONS,                             	/* where available */
+        "Enable X-System-Load-Avg header also in depends on User-Agent value, the syntax is {on|off} [User-Agent]" /* directive description */
     ),
     {NULL}
 };
