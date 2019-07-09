@@ -70,7 +70,7 @@ struct item *request_queue_fetch_request(struct request_queue * queue);
 enum protoCmd request_queue_add_request(struct request_queue * queue, struct item * request);
 
 void request_queue_remove_request(struct request_queue * queue, struct item * request, int render_time);
-void request_queue_clear_requests_by_fd(struct request_queue * queue, int fd);
+void request_queue_clear_requests_by_id(struct request_queue * queue, long id);
 struct item* request_queue_remove_canceled_request(struct request_queue *, struct item *);
 
 int request_queue_no_requests_queued(struct request_queue * queue, enum protoCmd);

@@ -91,14 +91,24 @@ void send_response(struct item *item, enum protoCmd rsp, int render_time) {
             
             send_cmd(req, item->fd);
             
+        } else {
+        	syslog(LOG_DEBUG, "send_response: skipped fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d) my(%d)", item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
         }
+
+
+
         prev = item;
         item = item->duplicates;
+
+        if(item) {
+        	syslog(LOG_DEBUG, "send_response: duplicated fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d) my(%d)", item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
+        }
+
         free(prev);
     }
 }
 
-enum protoCmd rx_request(struct protocol *req, int fd)
+enum protoCmd rx_request(struct protocol *req, connection *con)
 {
     struct item  *item, *request;
 
@@ -115,11 +125,11 @@ enum protoCmd rx_request(struct protocol *req, int fd)
     }
 
     syslog(LOG_DEBUG, "DEBUG: Got command %s fd(%d) xml(%s), z(%d), x(%d), y(%d), mime(%s), options(%s)",
-           cmdStr(req->cmd), fd, req->xmlname, req->z, req->x, req->y, req->mimetype, req->options);
+           cmdStr(req->cmd), con->fd, req->xmlname, req->z, req->x, req->y, req->mimetype, req->options);
 
     if ((req->cmd != cmdRender) && (req->cmd != cmdRenderPrio) && (req->cmd != cmdRenderLow) && (req->cmd != cmdDirty) && (req->cmd != cmdRenderBulk) && (req->cmd != cmdCancel)) {
         syslog(LOG_WARNING, "WARNING: Ignoring unknown command %s fd(%d) xml(%s), z(%d), x(%d), y(%d)",
-                    cmdStr(req->cmd), fd, req->xmlname, req->z, req->x, req->y);
+                    cmdStr(req->cmd), con->fd, req->xmlname, req->z, req->x, req->y);
         return cmdNotDone;
     }
 
@@ -131,7 +141,8 @@ enum protoCmd rx_request(struct protocol *req, int fd)
 
     item->req = *req;
     item->duplicates = NULL;
-    item->fd = (req->cmd == cmdDirty) ? FD_INVALID : fd;
+    item->fd = (req->cmd == cmdDirty) ? FD_INVALID : con->fd;
+    item->id = con->id;
 
 #ifdef METATILE
     /* Round down request co-ordinates to the neareast N (should be a power of 2)
@@ -149,10 +160,10 @@ enum protoCmd rx_request(struct protocol *req, int fd)
     	enum protoCmd ret = cmdCancelDone;
     	request = request_queue_remove_canceled_request(render_request_queue, item);
     	if(request) {
-    		syslog(LOG_DEBUG, "DEBUG: remove request from inQueue(%d): fd(%d) z(%d) x(%d) y(%d)", request->inQueue, request->fd, request->req.z, request->req.x, request->req.y);
+    		syslog(LOG_DEBUG, "DEBUG: remove request from inQueue(%d): id(%d) fd(%d) z(%d) x(%d) y(%d)", request->inQueue, request->id, request->fd, request->req.z, request->req.x, request->req.y);
     		send_response(request, ret, 0);
     	} else {
-       		syslog(LOG_DEBUG, "DEBUG: skipped cancel request, not found or rendering already: fd(%d) z(%d) x(%d) y(%d)", item->fd, item->req.z, item->req.x, item->req.y);
+       		syslog(LOG_DEBUG, "DEBUG: skipped cancel request, not found or rendering already: id(%d) fd(%d) z(%d) x(%d) y(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y);
        		ret = cmdCancelNotDone;
     	}
     	free(item);
@@ -176,10 +187,11 @@ void request_exit(void)
 
 void process_loop(int listen_fd)
 {
-    int num_connections = 0;
-    int connections[MAX_CONNECTIONS];
-    int pipefds[2];
+	int num_connections = 0;
+	connection connections[MAX_CONNECTIONS];
+	int pipefds[2];
     int exit_pipe_read;
+    long id_con = 0;
 
     bzero(connections, sizeof(connections));
 
@@ -202,8 +214,8 @@ void process_loop(int listen_fd)
         nfds = listen_fd+1;
 
         for (i=0; i<num_connections; i++) {
-            FD_SET(connections[i], &rd);
-            nfds = MAX(nfds, connections[i]+1);
+            FD_SET(connections[i].fd, &rd);
+            nfds = MAX(nfds, connections[i].fd+1);
         }
 
 	FD_SET(exit_pipe_read, &rd);
@@ -229,36 +241,37 @@ void process_loop(int listen_fd)
                         syslog(LOG_WARNING, "Connection limit(%d) reached. Dropping connection\n", MAX_CONNECTIONS);
                         close(incoming);
                     } else {
-                        connections[num_connections++] = incoming;
-                        syslog(LOG_DEBUG, "DEBUG: Got incoming connection, fd %d, number %d\n", incoming, num_connections);
+                    	long id = id_con++;
+                    	connections[num_connections].id = id;
+                    	connections[num_connections++].fd = incoming;
+                        syslog(LOG_DEBUG, "DEBUG: Got incoming connection, id %d, fd %d, number %d\n", id, incoming, num_connections);
                     }
                 }
             }
             for (i=0; num && (i<num_connections); i++) {
-                int fd = connections[i];
-                if (FD_ISSET(fd, &rd)) {
+                connection con = connections[i];
+                if (FD_ISSET(con.fd, &rd)) {
                     struct protocol cmd;
                     int ret = 0;
                     memset(&cmd,0,sizeof(cmd));
 
                     // TODO: to get highest performance we should loop here until we get EAGAIN
-                    ret = recv_cmd(&cmd, fd, 0);
+                    ret = recv_cmd(&cmd, con.fd, 0);
                     if (ret < 1) {
                         int j;
-
                         num_connections--;
-                        syslog(LOG_DEBUG, "DEBUG: Connection %d, fd %d closed, now %d left\n", i, fd, num_connections);
+                        syslog(LOG_DEBUG, "DEBUG: Connection %d, id %d, fd %d closed, now %d left", i, con.id, con.fd, num_connections);
                         for (j=i; j < num_connections; j++)
                             connections[j] = connections[j+1];
-                        request_queue_clear_requests_by_fd(render_request_queue, fd);
-                        close(fd);
+                        request_queue_clear_requests_by_id(render_request_queue, con.id);
+                        close(con.fd);
                     } else  {
 
-                    	enum protoCmd rsp = rx_request(&cmd, fd);
+                    	enum protoCmd rsp = rx_request(&cmd, &con);
                         if (rsp == cmdNotDone || rsp == cmdCancelNotDone) {
                         	cmd.cmd = rsp;
                         	syslog(LOG_DEBUG, "DEBUG: Sending %s(%d) response", cmdStr(rsp), rsp);
-                        	ret = send_cmd(&cmd, fd);
+                        	ret = send_cmd(&cmd, con.fd);
                         }
                     }
                 }

@@ -45,7 +45,10 @@ typedef struct {
     int num_threads;
 } xmlconfigitem;
 
-
+typedef struct {
+	int fd;
+	long id;
+} connection;
 
 struct request_queue * render_request_queue;
 
