@@ -19,6 +19,7 @@ struct item {
     struct item *duplicates;
     enum queueEnum inQueue;
     enum queueEnum originatedQueue;
+    long id;
 };
 
 //int render(Map &m, int x, int y, int z, const char *filename);

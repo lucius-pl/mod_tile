@@ -517,24 +517,30 @@ TEST_CASE( "renderd/queueing", "request queueing") {
 
         item = init_render_request(cmdRender);
         item->fd  = 1;
+        item->id = 0;
         request_queue_add_request(queue, item);
         item = init_render_request(cmdRender);
         item->fd  = 2;
+        item->id = 1;
         request_queue_add_request(queue, item);
-        request_queue_clear_requests_by_fd(queue, 2);
+        request_queue_clear_requests_by_id(queue, 1);
         item = init_render_request(cmdRender);
         item->fd  = 3;
+        item->id = 2;
         request_queue_add_request(queue, item);
         item = init_render_request(cmdRender);
         item->fd  = 4;
+        item->id  = 3;
         request_queue_add_request(queue, item);
         item = init_render_request(cmdRender);
         item->fd  = 5;
+        item->id  = 4;
         request_queue_add_request(queue, item);
         item = init_render_request(cmdRender);
         item->fd  = 6;
+        item->id  = 5;
         request_queue_add_request(queue, item);
-        request_queue_clear_requests_by_fd(queue, 4);
+        request_queue_clear_requests_by_id(queue, 3);
 
         item = request_queue_fetch_request(queue);
         REQUIRE (item->fd == 1);
