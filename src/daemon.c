@@ -160,10 +160,10 @@ enum protoCmd rx_request(struct protocol *req, connection *con)
     	enum protoCmd ret = cmdCancelDone;
     	request = request_queue_remove_canceled_request(render_request_queue, item);
     	if(request) {
-    		syslog(LOG_DEBUG, "DEBUG: remove request from inQueue(%d): fd(%d) z(%d) x(%d) y(%d)", request->inQueue, request->fd, request->req.z, request->req.x, request->req.y);
+    		syslog(LOG_DEBUG, "DEBUG: remove request from inQueue(%d): id(%d) fd(%d) z(%d) x(%d) y(%d)", request->inQueue, request->id, request->fd, request->req.z, request->req.x, request->req.y);
     		send_response(request, ret, 0);
     	} else {
-       		syslog(LOG_DEBUG, "DEBUG: skipped cancel request, not found or rendering already: fd(%d) z(%d) x(%d) y(%d)", item->fd, item->req.z, item->req.x, item->req.y);
+       		syslog(LOG_DEBUG, "DEBUG: skipped cancel request, not found or rendering already: id(%d) fd(%d) z(%d) x(%d) y(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y);
        		ret = cmdCancelNotDone;
     	}
     	free(item);

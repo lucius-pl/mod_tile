@@ -427,11 +427,28 @@ struct item* request_queue_remove_canceled_request(struct request_queue * queue,
 	struct item *request = lookup_item_idx(queue, item);
 	if(request) {
 
-		syslog(LOG_DEBUG, "request_queue_remove_canceled_request: search fd(%d) z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d), found fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d), my(%d)", item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my, request->fd, request->req.z, request->req.x, request->req.y, request->inQueue, request->mx, request->my);
+		syslog(LOG_DEBUG, "request_queue_remove_canceled_request: search id(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d), found id(%d), fd(%d), z(%d), x(%d), y(%d), inQueue(%d), mx(%d), my(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my, request->id, request->fd, request->req.z, request->req.x, request->req.y, request->inQueue, request->mx, request->my);
 
 		if(request->inQueue != queueRender) {
 
-			if(item->id == request->id && request->duplicates == NULL) {
+			short remove = 1;
+			struct item *r = request;
+
+			while(r) {
+
+				syslog(LOG_DEBUG, "request_queue_remove_canceled_request: id(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d)", r->id, r->fd, r->req.z, r->req.x, r->req.y, r->inQueue, r->mx, r->my);
+
+				if(r->fd != FD_INVALID && r->id != item->id) {
+					remove = 0;
+					break;
+				}
+
+				r = r->duplicates;
+			}
+
+			syslog(LOG_DEBUG, "request_queue_remove_canceled_request: remove (%d)", remove);
+
+			if(remove) {
 
 				pthread_mutex_lock(&(queue->qLock));
 				request->next->prev = request->prev;
