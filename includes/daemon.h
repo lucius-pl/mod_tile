@@ -56,6 +56,11 @@ void statsRenderFinish(int z, long time);
 void request_exit(void);
 void send_response(struct item *item, enum protoCmd rsp, int render_time);
 
+short get_log_level_value(const char* name);
+char* get_log_level_name(short value);
+short get_log_facility_value(const char* name);
+char* get_log_facility_name(short value);
+
 #ifdef __cplusplus
 }
 #endif
