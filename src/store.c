@@ -14,7 +14,9 @@
 #include <pthread.h>
 #endif
 #ifdef RENDERD
+#include "daemon.h"
 #include <syslog.h>
+#include <sys/syscall.h>
 #endif
 #ifdef APACHE
 #include <httpd.h>
@@ -32,6 +34,7 @@ extern server_rec* ap_server;
 #include "store_null.h"
 
 #define MSG_SIZE 1000
+#define RMSG_SIZE MSG_SIZE + 50
 
 //TODO: Make this function handle different logging backends, depending on if on compiles it from apache or something else
 void log_message(int log_lvl, const char *format, ...) {
@@ -43,7 +46,13 @@ void log_message(int log_lvl, const char *format, ...) {
     va_end(ap);
 
     #if defined RENDERD
-        syslog(log_lvl, msg);
+		#ifdef SYS_gettid
+    		char rmsg[RMSG_SIZE];
+    		snprintf(rmsg, RMSG_SIZE, "[tid %d] [%s] %s", syscall(SYS_gettid),  get_log_level_name(log_lvl), msg);
+    		syslog(log_lvl, rmsg);
+		#else
+    		syslog(log_lvl, msg);
+		#endif
     #elif defined APACHE
         ap_log_error(APLOG_MARK, log_lvl, 0, ap_server, msg);
     #else
