@@ -400,7 +400,7 @@ void *render_thread(void * arg)
         enum protoCmd ret;
         struct item *item = request_queue_fetch_request(render_request_queue);
 
-        syslog(LOG_DEBUG, "DEBUG: render_thread, fetch request from rendering queue: id(%ld) fd(%d) z(%d) x(%d) y(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y);
+        log_message(LOG_DEBUG, "render_thread, fetch request from rendering originatedQueue(%d): id(%ld) fd(%d) z(%d) x(%d) y(%d) mx(%d) my(%d)", item->originatedQueue, item->id, item->fd, item->req.z, item->req.x, item->req.y, item->mx, item->my);
 
         render_time = -1;
         if (item) {
@@ -422,11 +422,11 @@ void *render_thread(void * arg)
                             struct stat_info sinfo = maps[i].store->tile_stat(maps[i].store, req->xmlname, req->options, item->mx, item->my, req->z);
 
                             if(sinfo.size > 0)
-                                syslog(LOG_DEBUG, "DEBUG: START TILE %s %d %d-%d %d-%d, age %.2f days",
+                                log_message(LOG_DEBUG, "START TILE %s %d %d-%d %d-%d, age %.2f days",
                                        req->xmlname, req->z, item->mx, item->mx+size-1, item->my, item->my+size-1,
                                        (tim.tv_sec-sinfo.mtime)/86400.0);
                             else
-                                syslog(LOG_DEBUG, "DEBUG: START TILE %s %d %d-%d %d-%d, new metatile",
+                                log_message(LOG_DEBUG, "START TILE %s %d %d-%d %d-%d, new metatile",
                                        req->xmlname, req->z, item->mx, item->mx+size-1, item->my, item->my+size-1);
 
                             ret = render(&(maps[i]), item->mx, item->my, req->z, req->options, tiles);
@@ -434,7 +434,7 @@ void *render_thread(void * arg)
                             gettimeofday(&tim, NULL);
                             long t2=tim.tv_sec*1000+(tim.tv_usec/1000);
 
-                            syslog(LOG_DEBUG, "DEBUG: DONE TILE %s %d %d-%d %d-%d in %.3lf seconds",
+                            log_message(LOG_DEBUG, "DONE TILE %s %d %d-%d %d-%d in %.3lf seconds",
                                     req->xmlname, req->z, item->mx, item->mx+size-1, item->my, item->my+size-1, (t2 - t1)/1000.0);
 
                             render_time = t2 - t1;
@@ -463,12 +463,12 @@ void *render_thread(void * arg)
 #endif
 #endif //METATILE
                         } else {
-                            syslog(LOG_WARNING, "Received request for map layer %s is outside of acceptable bounds z(%i), x(%i), y(%i)",
+                            log_message(LOG_WARNING, "Received request for map layer %s is outside of acceptable bounds z(%i), x(%i), y(%i)",
                                     req->xmlname, req->z, req->x, req->y);
                             ret = cmdIgnore;
                         }
                     } else {
-                        syslog(LOG_ERR, "Received request for map layer '%s' which failed to load", req->xmlname);
+                        log_message(LOG_ERR, "Received request for map layer '%s' which failed to load", req->xmlname);
                         ret = cmdNotDone;
                     }
                     send_response(item, ret, render_time);
@@ -477,7 +477,7 @@ void *render_thread(void * arg)
                }
             }
             if (i == iMaxConfigs){
-                syslog(LOG_ERR, "No map for: %s", req->xmlname);
+                log_message(LOG_ERR, "No map for: %s", req->xmlname);
             }
         } else {
             sleep(1); // TODO: Use an event to indicate there are new requests

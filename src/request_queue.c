@@ -28,6 +28,7 @@
 #include <syslog.h>
 #include "render_config.h"
 #include "request_queue.h"
+#include "store.h"
 
 static int calcHashKey(struct request_queue *queue, struct item *item) {
     uint64_t xmlnameHash = 0;
@@ -142,7 +143,7 @@ static enum protoCmd pending(struct request_queue * queue, struct item *test) {
             test->duplicates = item->duplicates;
             item->duplicates = test;
             test->inQueue = queueDuplicate;
-            syslog(LOG_DEBUG, "pending: duplicated fd(%d) z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d) for fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d), my(%d)", test->fd, test->req.z, test->req.x, test->req.y, test->inQueue, test->mx, test->my, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
+            log_message(LOG_DEBUG, "pending: duplicated id(%d) fd(%d) z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d) for id(%d) fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d), my(%d)", test->id, test->fd, test->req.z, test->req.x, test->req.y, test->inQueue, test->mx, test->my, item->id, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
             return cmdIgnore;
         } else if ((item->inQueue == queueDirty) || (item->inQueue == queueRequestBulk)){
             return cmdNotDone;
@@ -424,10 +425,12 @@ void request_queue_close(struct request_queue * queue) {
 
 struct item* request_queue_remove_canceled_request(struct request_queue * queue, struct item * item) {
 
+	pthread_mutex_lock(&(queue->qLock));
+
 	struct item *request = lookup_item_idx(queue, item);
 	if(request) {
 
-		syslog(LOG_DEBUG, "request_queue_remove_canceled_request: search id(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d), found id(%d), fd(%d), z(%d), x(%d), y(%d), inQueue(%d), mx(%d), my(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my, request->id, request->fd, request->req.z, request->req.x, request->req.y, request->inQueue, request->mx, request->my);
+		log_message(LOG_DEBUG, "request_queue_remove_canceled_request: search id(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d), found id(%d), fd(%d), z(%d), x(%d), y(%d), inQueue(%d), mx(%d), my(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my, request->id, request->fd, request->req.z, request->req.x, request->req.y, request->inQueue, request->mx, request->my);
 
 		if(request->inQueue != queueRender) {
 
@@ -436,7 +439,7 @@ struct item* request_queue_remove_canceled_request(struct request_queue * queue,
 
 			while(r) {
 
-				syslog(LOG_DEBUG, "request_queue_remove_canceled_request: id(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d)", r->id, r->fd, r->req.z, r->req.x, r->req.y, r->inQueue, r->mx, r->my);
+				log_message(LOG_DEBUG, "request_queue_remove_canceled_request: id(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d)", r->id, r->fd, r->req.z, r->req.x, r->req.y, r->inQueue, r->mx, r->my);
 
 				if(r->fd != FD_INVALID && r->id != item->id) {
 					remove = 0;
@@ -446,11 +449,9 @@ struct item* request_queue_remove_canceled_request(struct request_queue * queue,
 				r = r->duplicates;
 			}
 
-			syslog(LOG_DEBUG, "request_queue_remove_canceled_request: remove (%d)", remove);
+			log_message(LOG_DEBUG, "request_queue_remove_canceled_request: remove (%d), id(%d)", remove, request->id);
 
 			if(remove) {
-
-				pthread_mutex_lock(&(queue->qLock));
 				request->next->prev = request->prev;
 				request->prev->next = request->next;
 				remove_item_idx(queue, request);
@@ -473,19 +474,19 @@ struct item* request_queue_remove_canceled_request(struct request_queue * queue,
 				}
 
 				queue->stats.noReqCanceled++;
-				pthread_mutex_unlock(&(queue->qLock));
-				return request;
 			}
+
+		} else {
+			log_message(LOG_DEBUG, "request_queue_remove_canceled_request: rendering already id(%d), fd(%d), z(%d), x(%d), y(%d), inQueue(%d), mx(%d), my(%d)", request->id, request->fd, request->req.z, request->req.x, request->req.y, request->inQueue, request->mx, request->my);
 		}
+
+	} else {
+		log_message(LOG_DEBUG, "request_queue_remove_canceled_request: not found (%d)", item->id);
 	}
 
-	return NULL;
+	pthread_mutex_unlock(&(queue->qLock));
+
+	return request;
 }
 
 /*****************************************************************************/
-
-
-
-
-
-

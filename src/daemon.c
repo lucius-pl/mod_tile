@@ -26,6 +26,7 @@
 #include "protocol.h"
 #include "protocol_helper.h"
 #include "request_queue.h"
+#include "store.h"
 
 #define PIDFILE "/var/run/renderd/renderd.pid"
 
@@ -85,6 +86,9 @@ void send_response(struct item *item, enum protoCmd rsp, int render_time) {
 
     while (item) {
         req = &item->req;
+
+    	log_message(LOG_DEBUG, "send_response: %s(%d), id(%d), fd(%d), z(%d), x(%d), y(%d), inQueue(%d), mx(%d) my(%d)", cmdStr(req->cmd), req->cmd, item->id, item->fd, req->z, req->x, req->y, item->inQueue, item->mx, item->my);
+
         if ((item->fd != FD_INVALID) && ((req->cmd == cmdRender) || (req->cmd == cmdRenderPrio) || (req->cmd == cmdRenderBulk) || (req->cmd == cmdCancel))) {
             req->cmd = rsp;
             //fprintf(stderr, "Sending message %s to %d\n", cmdStr(rsp), item->fd);
@@ -92,17 +96,12 @@ void send_response(struct item *item, enum protoCmd rsp, int render_time) {
             send_cmd(req, item->fd);
             
         } else {
-        	syslog(LOG_DEBUG, "send_response: skipped fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d) my(%d)", item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
+        	syslog(LOG_DEBUG, "send_response: skipped id(%d) fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d) my(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
         }
-
 
 
         prev = item;
         item = item->duplicates;
-
-        if(item) {
-        	syslog(LOG_DEBUG, "send_response: duplicated fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d) my(%d)", item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
-        }
 
         free(prev);
     }
@@ -124,12 +123,12 @@ enum protoCmd rx_request(struct protocol *req, connection *con)
         return cmdNotDone;
     }
 
-    syslog(LOG_DEBUG, "DEBUG: Got command %s fd(%d) xml(%s), z(%d), x(%d), y(%d), mime(%s), options(%s)",
-           cmdStr(req->cmd), con->fd, req->xmlname, req->z, req->x, req->y, req->mimetype, req->options);
+    log_message(LOG_DEBUG, "Got command %s(%d) id(%d) fd(%d) xml(%s), z(%d), x(%d), y(%d), mime(%s), options(%s)",
+           cmdStr(req->cmd), req->cmd, con->id, con->fd, req->xmlname, req->z, req->x, req->y, req->mimetype, req->options);
 
     if ((req->cmd != cmdRender) && (req->cmd != cmdRenderPrio) && (req->cmd != cmdRenderLow) && (req->cmd != cmdDirty) && (req->cmd != cmdRenderBulk) && (req->cmd != cmdCancel)) {
-        syslog(LOG_WARNING, "WARNING: Ignoring unknown command %s fd(%d) xml(%s), z(%d), x(%d), y(%d)",
-                    cmdStr(req->cmd), con->fd, req->xmlname, req->z, req->x, req->y);
+        log_message(LOG_WARNING, "Ignoring unknown command %s(%d) id(%d) fd(%d) xml(%s), z(%d), x(%d), y(%d)",
+                    cmdStr(req->cmd), req->cmd, con->id, con->fd, req->xmlname, req->z, req->x, req->y);
         return cmdNotDone;
     }
 
@@ -160,10 +159,10 @@ enum protoCmd rx_request(struct protocol *req, connection *con)
     	enum protoCmd ret = cmdCancelDone;
     	request = request_queue_remove_canceled_request(render_request_queue, item);
     	if(request) {
-    		syslog(LOG_DEBUG, "DEBUG: remove request from inQueue(%d): id(%d) fd(%d) z(%d) x(%d) y(%d)", request->inQueue, request->id, request->fd, request->req.z, request->req.x, request->req.y);
+    		log_message(LOG_DEBUG, "rx_request: removed request from inQueue(%d): id(%d) fd(%d) z(%d) x(%d) y(%d) mx(%d) my(%d)", request->inQueue, request->id, request->fd, request->req.z, request->req.x, request->req.y, request->mx, request->my);
     		send_response(request, ret, 0);
     	} else {
-       		syslog(LOG_DEBUG, "DEBUG: skipped cancel request, not found or rendering already: id(%d) fd(%d) z(%d) x(%d) y(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y);
+       		log_message(LOG_DEBUG, "rx_request: skipped cancel request id(%d) fd(%d) z(%d) x(%d) y(%d) mx(%d) my(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y, item->mx, item->my);
        		ret = cmdCancelNotDone;
     	}
     	free(item);
@@ -171,8 +170,10 @@ enum protoCmd rx_request(struct protocol *req, connection *con)
 
     } else {
 
-    	syslog(LOG_DEBUG, "DEBUG: add_request_to_queue: fd(%d) z(%d) x(%d) y(%d), ", item->fd, item->req.z, item->req.x, item->req.y);
-    	return request_queue_add_request(render_request_queue, item);
+    	enum protoCmd cmd = request_queue_add_request(render_request_queue, item);
+    	log_message(LOG_DEBUG, "rx_request: added request to inQueue(%d): id(%d) fd(%d) z(%d) x(%d) y(%d) mx(%d) my(%d)", item->inQueue, item->id, item->fd, item->req.z, item->req.x, item->req.y, item->mx, item->my);
+
+    	return cmd;
     }
 }
 
@@ -238,13 +239,13 @@ void process_loop(int listen_fd)
                     perror("accept()");
                 } else {
                     if (num_connections == MAX_CONNECTIONS) {
-                        syslog(LOG_WARNING, "Connection limit(%d) reached. Dropping connection\n", MAX_CONNECTIONS);
+                        log_message(LOG_WARNING, "Connection limit(%d) reached. Dropping connection", MAX_CONNECTIONS);
                         close(incoming);
                     } else {
                     	long id = id_con++;
                     	connections[num_connections].id = id;
                     	connections[num_connections++].fd = incoming;
-                        syslog(LOG_DEBUG, "DEBUG: Got incoming connection, id %d, fd %d, number %d\n", id, incoming, num_connections);
+                        log_message(LOG_DEBUG, "Got incoming connection, id %d, fd %d, number %d", id, incoming, num_connections);
                     }
                 }
             }
@@ -260,7 +261,7 @@ void process_loop(int listen_fd)
                     if (ret < 1) {
                         int j;
                         num_connections--;
-                        syslog(LOG_DEBUG, "DEBUG: Connection %d, id %d, fd %d closed, now %d left", i, con.id, con.fd, num_connections);
+                        log_message(LOG_DEBUG, "Connection %d, id %d, fd %d closed, now %d left", i, con.id, con.fd, num_connections);
                         for (j=i; j < num_connections; j++)
                             connections[j] = connections[j+1];
                         request_queue_clear_requests_by_id(render_request_queue, con.id);
@@ -270,7 +271,7 @@ void process_loop(int listen_fd)
                     	enum protoCmd rsp = rx_request(&cmd, &con);
                         if (rsp == cmdNotDone || rsp == cmdCancelNotDone) {
                         	cmd.cmd = rsp;
-                        	syslog(LOG_DEBUG, "DEBUG: Sending %s(%d) response", cmdStr(rsp), rsp);
+                        	log_message(LOG_DEBUG, "DEBUG: Sending %s(%d) response to id(%d) fd(%d)", cmdStr(rsp), rsp, con.id, con.fd);
                         	ret = send_cmd(&cmd, con.fd);
                         }
                     }
