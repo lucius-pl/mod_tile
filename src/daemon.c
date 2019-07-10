@@ -16,8 +16,6 @@
 #include <signal.h>
 #include <string.h>
 #include <strings.h>
-#define SYSLOG_NAMES
-#include <syslog.h>
 #include <getopt.h>
 
 #include "render_config.h"
@@ -26,6 +24,7 @@
 #include "protocol.h"
 #include "protocol_helper.h"
 #include "request_queue.h"
+#include "log_msg.h"
 
 #define PIDFILE "/var/run/renderd/renderd.pid"
 
@@ -660,51 +659,6 @@ void *slave_thread(void * arg) {
     free(req_slave);
     return NULL;
 }
-
-/* get log level value by name */
-short get_log_level_value(const char* name) {
-
-    for(int i=0; i<sizeof(prioritynames)/sizeof(prioritynames[0]) - 1; i++) {
-        if(strcasecmp(name, prioritynames[i].c_name) == 0) {
-            return prioritynames[i].c_val;
-        }
-    }
-    return -1;
-}
-
-/* get log level name by value */
-char* get_log_level_name(short value) {
-
-    for(int i=0; i<sizeof(prioritynames)/sizeof(prioritynames[0]) - 1; i++) {
-        if(value == prioritynames[i].c_val) {
-            return prioritynames[i].c_name;
-        }
-    }
-    return NULL;
-}
-
-/* get log facility value by name */
-short get_log_facility_value(const char* name) {
-
-    for(int i=0; i<sizeof(facilitynames)/sizeof(facilitynames[0]) - 1; i++) {
-        if(strcasecmp(name, facilitynames[i].c_name) == 0) {
-            return facilitynames[i].c_val;
-        }
-    }
-    return -1;
-}
-
-/* get log facility name by value */
-char* get_log_facility_name(short value) {
-
-    for(int i=0; i<sizeof(facilitynames)/sizeof(facilitynames[0]) - 1; i++) {
-        if(value == facilitynames[i].c_val) {
-            return facilitynames[i].c_name;
-        }
-    }
-    return NULL;
-}
-
 
 #ifndef MAIN_ALREADY_DEFINED
 int main(int argc, char **argv)

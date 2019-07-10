@@ -16,7 +16,7 @@
 #include "store_ro_http_proxy.h"
 #include "render_config.h"
 #include "protocol.h"
-
+#include "log_msg.h"
 
 #ifdef HAVE_LIBCURL
 

@@ -17,7 +17,7 @@
 #include "store_ro_composite.h"
 #include "render_config.h"
 #include "protocol.h"
-
+#include "log_msg.h"
 
 #ifdef WANT_STORE_COMPOSITE
 
