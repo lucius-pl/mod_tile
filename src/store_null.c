@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <limits.h>
 
+#include "log_msg.h"
+
 static int tile_read(struct storage_backend * store, 
 		     const char *xmlconfig, 
              const char *options,

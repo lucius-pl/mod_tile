@@ -25,7 +25,7 @@
 #include "store_file.h"
 #include "store_file_utils.h"
 #include "protocol.h"
-
+#include "log_msg.h"
 
 static time_t getPlanetTime(const char * tile_dir, const char * xmlname)
 {
