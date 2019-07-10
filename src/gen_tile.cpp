@@ -104,7 +104,7 @@ struct projectionconfig * get_projection(const char * srs) {
     struct projectionconfig * prj;
 
     if (strstr(srs,"+proj=merc +a=6378137 +b=6378137") != NULL) {
-        syslog(LOG_DEBUG, "Using web mercator projection settings");
+        log_message(LOG_DEBUG, "Using web mercator projection settings");
         prj = (struct projectionconfig *)malloc(sizeof(struct projectionconfig));
         prj->bound_x0 = -20037508.3428;
         prj->bound_x1 =  20037508.3428;
@@ -113,7 +113,7 @@ struct projectionconfig * get_projection(const char * srs) {
         prj->aspect_x = 1;
         prj->aspect_y = 1;
     } else if (strcmp(srs, "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs") == 0) {
-        syslog(LOG_DEBUG, "Using plate carree projection settings");
+        log_message(LOG_DEBUG, "Using plate carree projection settings");
         prj = (struct projectionconfig *)malloc(sizeof(struct projectionconfig));
         prj->bound_x0 = -20037508.3428;
         prj->bound_x1 =  20037508.3428;
@@ -122,7 +122,7 @@ struct projectionconfig * get_projection(const char * srs) {
         prj->aspect_x = 2;
         prj->aspect_y = 1;
     } else if (strcmp(srs, "+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +datum=OSGB36 +units=m +no_defs") == 0) {
-        syslog(LOG_DEBUG, "Using bng projection settings");
+        log_message(LOG_DEBUG, "Using bng projection settings");
         prj = (struct projectionconfig *)malloc(sizeof(struct projectionconfig));
         prj->bound_x0 = 0;
         prj->bound_y0 = 0;
@@ -131,7 +131,7 @@ struct projectionconfig * get_projection(const char * srs) {
         prj->aspect_x = 1;
         prj->aspect_y = 2;
     } else {
-        syslog(LOG_WARNING, "Unknown projection string, using web mercator as never the less. %s", srs);
+        log_message(LOG_WARNING, "Unknown projection string, using web mercator as never the less. %s", srs);
         prj = (struct projectionconfig *)malloc(sizeof(struct projectionconfig));
         prj->bound_x0 = -20037508.3428;
         prj->bound_x1 =  20037508.3428;
@@ -151,7 +151,7 @@ static void load_fonts(const char *font_dir, int recurse)
     char path[PATH_MAX]; // FIXME: Eats lots of stack space when recursive
 
     if (!fonts) {
-        syslog(LOG_CRIT, "Unable to open font directory: %s", font_dir);
+        log_message(LOG_CRIT, "Unable to open font directory: %s", font_dir);
         return;
     }
 
@@ -171,7 +171,7 @@ static void load_fonts(const char *font_dir, int recurse)
         }
         p = strrchr(path, '.');
         if (p && (!strcmp(p, ".ttf") || !strcmp(p, ".otf") || !strcmp(p, ".ttc"))) {
-            syslog(LOG_DEBUG, "DEBUG: Loading font: %s", path);
+            log_message(LOG_DEBUG, "Loading font: %s", path);
             freetype_engine::register_font(path);
         }
     }
@@ -218,7 +218,7 @@ static int check_xyz(int x, int y, int z, struct xmlmapconfig * map) {
     }
 
     if (oob)
-        syslog(LOG_INFO, "got bad co-ords: x(%d) y(%d) z(%d)\n", x, y, z);
+        log_message(LOG_INFO, "got bad co-ords: x(%d) y(%d) z(%d)\n", x, y, z);
 
     return !oob;
 }
@@ -234,7 +234,7 @@ mapnik::box2d<double> tile2prjbounds(struct projectionconfig * prj, int x, int y
     double p1x = prj->bound_x0 + (prj->bound_x1 - prj->bound_x0)* (((double)x + render_size_tx) / (double)(prj->aspect_x * 1<<z));
     double p1y = (prj->bound_y1 - (prj->bound_y1 - prj->bound_y0)* ((double)y / (double)(prj->aspect_y * 1<<z)));
 
-    syslog(LOG_DEBUG, "Rendering projected coordinates %i %i %i -> %f|%f %f|%f to a %i x %i tile\n", z, x, y, p0x, p0y, p1x, p1y, render_size_tx, render_size_ty);
+    log_message(LOG_DEBUG, "Rendering projected coordinates %i %i %i -> %f|%f %f|%f to a %i x %i tile", z, x, y, p0x, p0y, p1x, p1y, render_size_tx, render_size_ty);
 
     mapnik::box2d<double> bbox(p0x, p0y, p1x,p1y);
     return  bbox;
@@ -260,8 +260,8 @@ static enum protoCmd render(struct xmlmapconfig * map, int x, int y, int z, char
         mapnik::agg_renderer<mapnik::image_32> ren(map_parameterized,buf,map->scale);
         ren.apply();
     } catch (std::exception const& ex) {
-      syslog(LOG_ERR, "ERROR: failed to render TILE %s %d %d-%d %d-%d", map->xmlname, z, x, x+render_size_tx-1, y, y+render_size_ty-1);
-      syslog(LOG_ERR, "   reason: %s", ex.what());
+      log_message(LOG_ERR, "ERROR: failed to render TILE %s %d %d-%d %d-%d", map->xmlname, z, x, x+render_size_tx-1, y, y+render_size_ty-1);
+      log_message(LOG_ERR, "   reason: %s", ex.what());
       return cmdNotDone;
     }
 
@@ -325,7 +325,7 @@ static enum protoCmd render(Map &m, const char *tile_dir, char *xmlname, project
 
 void render_init(const char *plugins_dir, const char* font_dir, int font_dir_recurse)
 {
-  syslog(LOG_INFO, "Renderd is using mapnik version %i.%i.%i", ((MAPNIK_VERSION) / 100000), (((MAPNIK_VERSION) / 100) % 1000), ((MAPNIK_VERSION) % 100));
+  log_message(LOG_INFO, "Renderd is using mapnik version %i.%i.%i", ((MAPNIK_VERSION) / 100000), (((MAPNIK_VERSION) / 100) % 1000), ((MAPNIK_VERSION) % 100));
 #if MAPNIK_VERSION >= 200200
     mapnik::datasource_cache::instance().register_datasources(plugins_dir);
 #else
@@ -364,15 +364,15 @@ void *render_thread(void * arg)
                  * up the mapnik datasources to support larger postgres connection pools
                  */
                 if (parentxmlconfig[iMaxConfigs].num_threads > 10) {
-                    syslog(LOG_INFO, "Updating max_connection parameter for mapnik layers to reflect thread count");
+                    log_message(LOG_INFO, "Updating max_connection parameter for mapnik layers to reflect thread count");
                     parameterize_map_max_connections(maps[iMaxConfigs].map, parentxmlconfig[iMaxConfigs].num_threads);
                 }
                 maps[iMaxConfigs].prj = get_projection(maps[iMaxConfigs].map.srs().c_str());
             } catch (std::exception const& ex) {
-                syslog(LOG_ERR, "An error occurred while loading the map layer '%s': %s", maps[iMaxConfigs].xmlname, ex.what());
+                log_message(LOG_ERR, "An error occurred while loading the map layer '%s': %s", maps[iMaxConfigs].xmlname, ex.what());
                 maps[iMaxConfigs].ok = 0;
             } catch (...) {
-                syslog(LOG_ERR, "An unknown error occurred while loading the map layer '%s'", maps[iMaxConfigs].xmlname);
+                log_message(LOG_ERR, "An unknown error occurred while loading the map layer '%s'", maps[iMaxConfigs].xmlname);
                 maps[iMaxConfigs].ok = 0;
             }
 
@@ -384,9 +384,9 @@ void *render_thread(void * arg)
                 maps[iMaxConfigs].htcpsock = init_cache_expire(
                         maps[iMaxConfigs].htcphost);
                 if (maps[iMaxConfigs].htcpsock > 0) {
-                    syslog(LOG_INFO, "Successfully opened socket for HTCP cache expiry");
+                    log_message(LOG_INFO, "Successfully opened socket for HTCP cache expiry");
                 } else {
-                    syslog(LOG_ERR, "Failed to opened socket for HTCP cache expiry");
+                    log_message(LOG_ERR, "Failed to opened socket for HTCP cache expiry");
                 }
             } else {
                 maps[iMaxConfigs].htcpsock = -1;
@@ -448,11 +448,11 @@ void *render_thread(void * arg)
 #endif
 
                                 } catch (std::exception const& ex) {
-                                    syslog(LOG_ERR, "Received exception when writing metatile to disk: %s", ex.what());
+                                    log_message(LOG_ERR, "Received exception when writing metatile to disk: %s", ex.what());
                                     ret = cmdNotDone;
                                 } catch (...) {
                                     // Treat any error as fatal and request end of processing
-                                    syslog(LOG_ERR, "Failed writing metatile to disk with unknown error, requesting exit.");
+                                    log_message(LOG_ERR, "Failed writing metatile to disk with unknown error, requesting exit.");
                                     ret = cmdNotDone;
                                     request_exit();
                                 }

@@ -94,7 +94,7 @@ void send_response(struct item *item, enum protoCmd rsp, int render_time) {
             send_cmd(req, item->fd);
             
         } else {
-        	syslog(LOG_DEBUG, "send_response: skipped id(%d) fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d) my(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
+        	log_message(LOG_DEBUG, "send_response: skipped id(%d) fd(%d) z(%d), x(%d), y(%d), inQueue(%d), mx(%d) my(%d)", item->id, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
         }
 
 

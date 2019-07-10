@@ -220,14 +220,14 @@ void request_queue_clear_requests_by_id(struct request_queue * queue, long id) {
 
         item = queueHead->next;
         while (item != queueHead) {
-            syslog(LOG_DEBUG, "request_queue_clear_requests_by_id: sid=(%d), id=(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d)", id, item->id, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
+            log_message(LOG_DEBUG, "request_queue_clear_requests_by_id: sid=(%d), id=(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d)", id, item->id, item->fd, item->req.z, item->req.x, item->req.y, item->inQueue, item->mx, item->my);
 
         	if (item->id == id)
                 item->fd = FD_INVALID;
 
             dupes = item->duplicates;
             while (dupes) {
-                syslog(LOG_DEBUG, "request_queue_clear_requests_by_id: duplicates sid=(%d), id=(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d)", id, dupes->id, dupes->fd, dupes->req.z, dupes->req.x, dupes->req.y, dupes->inQueue, dupes->mx, dupes->my);
+                log_message(LOG_DEBUG, "request_queue_clear_requests_by_id: duplicates sid=(%d), id=(%d), fd(%d), z(%d), x(%d), y(%d) inQueue(%d), mx(%d), my(%d)", id, dupes->id, dupes->fd, dupes->req.z, dupes->req.x, dupes->req.y, dupes->inQueue, dupes->mx, dupes->my);
 
             	if (dupes->id == id)
                     dupes->fd = FD_INVALID;
