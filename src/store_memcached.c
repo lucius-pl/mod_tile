@@ -23,7 +23,7 @@
 #include "metatile.h"
 #include "render_config.h"
 #include "protocol.h"
-
+#include "log_msg.h"
 
 #ifdef HAVE_LIBMEMCACHED
 static char * memcached_xyzo_to_storagekey(const char *xmlconfig, const char *options, int x, int y, int z, char * key) {

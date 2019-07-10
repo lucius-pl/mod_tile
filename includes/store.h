@@ -7,16 +7,11 @@ extern "C" {
 
 #include <stdlib.h>
 #include <sys/types.h>
-#include <syslog.h>
 #include "render_config.h"
 
-#define STORE_LOGLVL_DEBUG    LOG_DEBUG
-#define STORE_LOGLVL_INFO     LOG_INFO
-#define STORE_LOGLVL_WARNING  LOG_WARNING
-#define STORE_LOGLVL_ERR      LOG_ERR
 
+typedef enum {unknow, renderd, cache, s3} tile_origin;
 
-    typedef enum {unknow, renderd, cache, s3} tile_origin;
 
     struct stat_info {
         off_t     size;    /* total size, in bytes */
@@ -41,8 +36,6 @@ extern "C" {
         int socket;
         long timeout;
     };
-
-    void log_message(int log_lvl, const char *format, ...);
 
     struct storage_backend * init_storage_backend(const char * options);
 
