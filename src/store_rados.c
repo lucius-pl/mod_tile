@@ -26,7 +26,7 @@
 #include "metatile.h"
 #include "render_config.h"
 #include "protocol.h"
-
+#include "log_msg.h"
 
 #ifdef HAVE_LIBRADOS
 

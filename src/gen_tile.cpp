@@ -30,6 +30,7 @@
 #include "request_queue.h"
 #include "cache_expire.h"
 #include "parameterize_style.hpp"
+#include "log_msg.h"
 
 #ifdef HTCP_EXPIRE_CACHE
 #include <sys/socket.h>

@@ -28,7 +28,7 @@
 #include <syslog.h>
 #include "render_config.h"
 #include "request_queue.h"
-#include "store.h"
+#include "log_msg.h"
 
 static int calcHashKey(struct request_queue *queue, struct item *item) {
     uint64_t xmlnameHash = 0;
