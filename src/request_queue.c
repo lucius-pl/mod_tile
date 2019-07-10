@@ -449,8 +449,6 @@ struct item* request_queue_remove_canceled_request(struct request_queue * queue,
 				r = r->duplicates;
 			}
 
-			log_message(LOG_DEBUG, "request_queue_remove_canceled_request: remove (%d), id(%d)", remove, request->id);
-
 			if(remove) {
 				request->next->prev = request->prev;
 				request->prev->next = request->next;
@@ -474,14 +472,19 @@ struct item* request_queue_remove_canceled_request(struct request_queue * queue,
 				}
 
 				queue->stats.noReqCanceled++;
+
+			} else {
+				log_message(LOG_DEBUG, "request_queue_remove_canceled_request: not all closed id(%d), fd(%d), z(%d), x(%d), y(%d), inQueue(%d), mx(%d), my(%d)", r->id, r->fd, r->req.z, r->req.x, r->req.y, r->inQueue, r->mx, r->my);
+				request = NULL;
 			}
 
 		} else {
 			log_message(LOG_DEBUG, "request_queue_remove_canceled_request: rendering already id(%d), fd(%d), z(%d), x(%d), y(%d), inQueue(%d), mx(%d), my(%d)", request->id, request->fd, request->req.z, request->req.x, request->req.y, request->inQueue, request->mx, request->my);
+			request = NULL;
 		}
 
 	} else {
-		log_message(LOG_DEBUG, "request_queue_remove_canceled_request: not found (%d)", item->id);
+		log_message(LOG_DEBUG, "request_queue_remove_canceled_request: not found id(%d), fd(%d), z(%d), mx(%d), my(%d), xmlname(%s)", item->id, item->fd, item->req.z, item->mx, item->my, item->req.xmlname);
 	}
 
 	pthread_mutex_unlock(&(queue->qLock));
