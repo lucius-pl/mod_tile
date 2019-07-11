@@ -274,7 +274,7 @@ static reqTileState request_tile(request_rec *r, struct protocol *cmd, int rende
         		tpoll[1].events = POLLRDHUP;
         	}
 
-            int s = poll(tpoll, size, timeout);
+            s = poll(tpoll, size, timeout);
 
             ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, "request_tile: poll() return: %d", s);
 
