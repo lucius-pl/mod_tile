@@ -27,6 +27,7 @@ typedef struct {
     int mapnik_font_dir_recurse;
     char * stats_filename;
     short log_level;
+    int log_facility;
 } renderd_config;
 
 typedef struct {
@@ -44,7 +45,10 @@ typedef struct {
     int num_threads;
 } xmlconfigitem;
 
-
+typedef struct {
+	int fd;
+	long id;
+} connection;
 
 struct request_queue * render_request_queue;
 

@@ -12,20 +12,7 @@ extern "C"
 
 struct storage_backend* init_storage_s3(const char *connection_string);
 
-
-#ifdef HAVE_LIBDSAA
-
-typedef enum {
-    CREATE_DIR = 1,
-    CREATE_FILE = 2,
-    READ = 3,
-    UPDATE = 4,
-    DELETE = 5
-} MsgQueType;
-
-int store_s3_cache_send_msg(char*, MsgQueType);
-
-#endif
+#define PIPE_DIR "/var/run/renderd"
 
 #ifdef __cplusplus
 }

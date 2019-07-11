@@ -1,4 +1,5 @@
 #include "protocol.h"
+#include "log_msg.h"
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <syslog.h>
@@ -7,9 +8,9 @@
 
 int send_cmd(struct protocol * cmd, int fd) {
     int ret;
-    syslog(LOG_DEBUG, "DEBUG: Sending render cmd(%i %s %i/%i/%i) with protocol version %i to fd %i\n", cmd->cmd, cmd->xmlname, cmd->z, cmd->x, cmd->y, cmd->ver, fd);
+    log_message(LOG_DEBUG, "Sending render cmd(%i %s %i/%i/%i) with protocol version %i to fd %i", cmd->cmd, cmd->xmlname, cmd->z, cmd->x, cmd->y, cmd->ver, fd);
     if ((cmd->ver > 3) || (cmd->ver < 1)) {
-        syslog(LOG_WARNING, "WARNING: Failed to send render cmd with unknown protocol version %i on fd %d\n", cmd->ver, fd);
+        log_message(LOG_WARNING, "Failed to send render cmd with unknown protocol version %i on fd %d", cmd->ver, fd);
         return -1;
     }
     switch (cmd->ver) { 
@@ -24,7 +25,7 @@ int send_cmd(struct protocol * cmd, int fd) {
         break; 
     }
     if ((ret != sizeof(struct protocol)) && (ret != sizeof(struct protocol_v2)) && (ret != sizeof(struct protocol_v1))) {
-        syslog(LOG_WARNING, "WARNING: Failed to send render cmd on fd %i\n", fd);
+        log_message(LOG_WARNING, "Failed to send render cmd on fd %i", fd);
         perror("send error");
     }
     return ret;
@@ -35,17 +36,17 @@ int recv_cmd(struct protocol * cmd, int fd,  int block) {
     memset(cmd,0,sizeof(*cmd));
     ret = recv(fd, cmd, sizeof(struct protocol_v1), block?MSG_WAITALL:MSG_DONTWAIT);
     if (ret < 1) {
-        syslog(LOG_INFO, "DEBUG: Failed to read cmd on fd %i", fd);
+        log_message(LOG_INFO, "Failed to read cmd on fd %i", fd);
         return -1;
     } else if (ret < sizeof(struct protocol_v1)) {
-        syslog(LOG_INFO, "DEBUG: Read incomplete cmd on fd %i", fd);
+        log_message(LOG_INFO, "Read incomplete cmd on fd %i", fd);
         return 0;
     }
     if ((cmd->ver > 3) || (cmd->ver < 1)) {
-        syslog(LOG_WARNING, "WARNING: Failed to recieve render cmd with unknown protocol version %i\n", cmd->ver);
+        log_message(LOG_WARNING, "Failed to recieve render cmd with unknown protocol version %i", cmd->ver);
         return -1;
     }
-    syslog(LOG_DEBUG, "DEBUG: Got incoming request with protocol version %i\n", cmd->ver); 
+    log_message(LOG_DEBUG, "Got incoming request with protocol version %i", cmd->ver);
     switch (cmd->ver) {
     case 1:
         ret2 = 0;
@@ -57,7 +58,7 @@ int recv_cmd(struct protocol * cmd, int fd,  int block) {
     }
     
     if ((cmd->ver > 1) && (ret2 < 1)) {
-        syslog(LOG_WARNING, "WARNING: Socket prematurely closed: %i\n", fd); 
+        log_message(LOG_WARNING, "Socket prematurely closed: %i", fd);
         return -1;
     }
     
@@ -66,6 +67,6 @@ int recv_cmd(struct protocol * cmd, int fd,  int block) {
     if ((ret == sizeof(struct protocol)) || (ret == sizeof(struct protocol_v1)) || (ret == sizeof(struct protocol_v2))) {
         return ret;
     }
-    syslog(LOG_WARNING, "WARNING: Socket read wrong number of bytes: %i -> %li, %li\n", ret, sizeof(struct protocol_v2), sizeof(struct protocol)); 
+    log_message(LOG_WARNING, "Socket read wrong number of bytes: %i -> %li, %li", ret, sizeof(struct protocol_v2), sizeof(struct protocol));
     return 0;
 }

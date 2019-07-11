@@ -1,27 +1,10 @@
 /* wrapper for storage engines
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <limits.h>
 #include <string.h>
-#include <errno.h>
-#include <stdarg.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#ifdef HAVE_PTHREAD
-#include <pthread.h>
-#endif
-#ifdef RENDERD
-#include <syslog.h>
-#endif
-#ifdef APACHE
-#include <httpd.h>
-#include <http_log.h>
-APLOG_USE_MODULE(tile);
-extern server_rec* ap_server;
-#endif
+#include <errno.h>
 
 #include "store.h"
 #include "store_file.h"
@@ -31,27 +14,7 @@ extern server_rec* ap_server;
 #include "store_ro_composite.h"
 #include "store_s3.h"
 #include "store_null.h"
-
-#define MSG_SIZE 1000
-
-//TODO: Make this function handle different logging backends, depending on if on compiles it from apache or something else
-void log_message(int log_lvl, const char *format, ...) {
-    va_list ap;
-    char msg[MSG_SIZE];
-
-    va_start(ap, format);
-    vsnprintf(msg, MSG_SIZE, format, ap);
-    va_end(ap);
-
-    #if defined RENDERD
-        syslog(log_lvl, msg);
-    #elif defined APACHE
-        ap_log_error(APLOG_MARK, log_lvl, 0, ap_server, msg);
-    #else
-        fprintf(stderr, msg);
-        fflush(stderr);
-    #endif
-}
+#include "log_msg.h"
 
 /**
  * In Apache 2.2, we call the init_storage_backend once per process. For mpm_worker and mpm_event multiple threads therefore use the same
@@ -122,6 +85,3 @@ char* tile_origin_name(tile_origin origin) {
     static char* origin_name[] = {"unknow", "renderd", "cache", "s3"};
     return origin_name[origin];
 }
-
-
-
