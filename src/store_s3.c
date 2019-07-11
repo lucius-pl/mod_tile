@@ -861,7 +861,7 @@ static int store_s3_tile_read_with_cache(struct storage_backend *store, const ch
 static int store_s3_tile_read_without_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, char *buf, size_t sz, int *compressed, char *log_msg)
 {
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
-    char *path = malloc(PATH_MAX);
+    char path[PATH_MAX];
 
     //log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_read: fetching tile");
 
@@ -889,15 +889,11 @@ static int store_s3_tile_read_without_cache(struct storage_backend *store, const
             msg = request.error_details->message;
         }
         log_message(STORE_LOGLVL_ERR, "store_s3_tile_read: failed to retrieve object: %d(%s)/%s", request.result, S3_get_status_name(request.result), msg);
-        free(path);
-        path = NULL;
         return -1;
     }
 
     log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_read: retrieved metatile %s of size %i", path, request.tile_size);
 
-    free(path);
-    path = NULL;
 
     // extract tile from metatile
 
@@ -998,7 +994,7 @@ static void store_s3_pipe_path(char *pipePath, size_t len, char* path) {
 	    sum += *c++;
 	  }
 
-	  snprintf(pipePath, len, "%s/%d", PIPE_DIR, sum);
+	  snprintf(pipePath, len, "%s/%ld", PIPE_DIR, sum);
 }
 
 /*****************************************************************************/
