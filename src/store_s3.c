@@ -1047,21 +1047,43 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     char pipePath[PATH_MAX];
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
     struct stat st_stat;
+    int fd;
 
     /* get metatile file stat from cache */
 
     xyzo_to_meta(cachePath, PATH_MAX, ctx->s3Cache.path, xmlconfig, options, x, y, z);
 
-    if(! stat(cachePath, &st_stat)) {
-        tile_stat->size = st_stat.st_size;
-        tile_stat->mtime = st_stat.st_mtime;
-        tile_stat->atime = st_stat.st_atime;
-        tile_stat->ctime = st_stat.st_ctime;
-        tile_stat->origin = cache;
 
-        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #1 successfully read properties of metatile from cache %s", cachePath);
+    fd = open(cachePath, O_RDONLY);
+    if(fd != -1) {
 
-        return;
+    	if(flock(fd, LOCK_SH) != -1) {
+
+        	if(fstat(fd, &st_stat) != -1) {
+
+        		tile_stat->size = st_stat.st_size;
+        		tile_stat->mtime = st_stat.st_mtime;
+        		tile_stat->atime = st_stat.st_atime;
+        		tile_stat->ctime = st_stat.st_ctime;
+        		tile_stat->origin = cache;
+
+        		log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #1 successfully read properties of metatile from cache %s", cachePath);
+
+        		close(fd);
+        		return;
+
+            } else {
+            	log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: fstat(%s) error, %s", cachePath, strerror(errno));
+            	close(fd);
+            }
+
+    	} else {
+    		log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: flock(%s) error, %s", cachePath, strerror(errno));
+    		close(fd);
+    	}
+
+    } else if(errno != ENOENT) {
+    	log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: open(%s) error, %s", cachePath, strerror(errno));
     }
 
     #ifdef APACHE
