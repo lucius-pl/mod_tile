@@ -717,7 +717,7 @@ static int store_s3_save_tile_to_cache(const char* metatile, size_t metatile_siz
          return -1;
     }
 
-    int fd = open(cachePath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    int fd = open(cachePath, O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR |  S_IWUSR | S_IRGRP | S_IWGRP |  S_IROTH);
     if (fd < 0) {
         log_message(STORE_LOGLVL_ERR, "%s: error creating metatile %s in S3 cache: %s", source, cachePath, strerror(errno));
         return -1;
