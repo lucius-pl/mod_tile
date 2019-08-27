@@ -712,15 +712,12 @@ static struct s3_tile_request store_s3_get_tile_from_s3(S3BucketContext* ctx, co
 
 static int store_s3_save_tile_to_cache(const char* metatile, size_t metatile_size, char* cachePath, const char* source) {
 
-    mode_t pumask = umask(0);
-    log_message(STORE_LOGLVL_DEBUG, "store_s3_save_tile_to_cache: reset umask to 0, previous umask is (%04o)", pumask);
-
     if (mkdirp(cachePath)) {
          log_message(STORE_LOGLVL_ERR, "%s: error creating S3 cache directory structure for meta tile: %s", source, cachePath);
          return -1;
     }
 
-    int fd = open(cachePath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    int fd = open(cachePath, O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR |  S_IWUSR | S_IRGRP | S_IWGRP |  S_IROTH);
     if (fd < 0) {
         log_message(STORE_LOGLVL_ERR, "%s: error creating metatile %s in S3 cache: %s", source, cachePath, strerror(errno));
         return -1;
@@ -1092,9 +1089,6 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     		tile_stat->aborted = 1;
     		return;
     	}
-
-        mode_t pumask = umask(0);
-        log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: reset umask to 0, previous umask is (%04o)", pumask);
 
         store_s3_pipe_path(pipePath, PATH_MAX, cachePath);
 		if(mkfifo(pipePath, S_IRUSR |  S_IWUSR | S_IRGRP | S_IWGRP) != 0 ) {

@@ -226,6 +226,8 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
 
     if (fd == FD_INVALID) {
         ap_log_rerror(APLOG_MARK, APLOG_NOTICE, 0, r, "Failed to connect to renderer");
+        struct tile_request_data * rdata = (struct tile_request_data *)ap_get_module_config(r->request_config, &tile_module);
+        rdata->store->tile_cancel(rdata->store, cmd->xmlname, cmd->options, cmd->x, cmd->y, cmd->z);
         return reqError;
     }
 
