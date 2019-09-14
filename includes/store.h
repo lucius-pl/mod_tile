@@ -20,7 +20,6 @@ typedef enum {unknow, renderd, cache, s3} tile_origin;
         time_t    ctime;   /* time of last status change */
         int       expired; /* has the tile expired */
         tile_origin origin;  /* origin of a tile */
-        short aborted;		/* is a request canceled */
     };
 
     struct storage_backend {
@@ -31,10 +30,7 @@ typedef enum {unknow, renderd, cache, s3} tile_origin;
         int (*metatile_expire)(struct storage_backend * store, const char *xmlconfig, int x, int y, int z);
         char * (*tile_storage_id)(struct storage_backend * store, const char *xmlconfig, const char *options, int x, int y, int z, char * string);
         int (*close_storage)(struct storage_backend * store);
-        void (*tile_cancel)(struct storage_backend * store, const char *xmlconfig, const char *options, int x, int y, int z);
         void * storage_ctx;
-        int socket;
-        long timeout;
     };
 
     struct storage_backend * init_storage_backend(const char * options);

@@ -290,6 +290,7 @@ void s3_cache_print(S3Cache* s3Cache) {
 
 int s3_cache_update_file_size(S3Cache *s3Cache, struct list_data *ld) {
 	struct stat fs;
+	list_item_position p = list_item_last;
 
 	if(stat(ld->path, &fs) != 0) {
         log_message(LOG_ERR, "s3_cache_update_file_size: stat(%s) error(%d) %s", ld->path, errno, strerror(errno));
@@ -301,6 +302,13 @@ int s3_cache_update_file_size(S3Cache *s3Cache, struct list_data *ld) {
 		s3Cache->fileSize += fs.st_size;
 		ld->size = fs.st_size;
 		log_message(LOG_DEBUG, "s3_cache_update_file_size: file(%s) size(%d) updated.", ld->path, ld->size);
+	}
+
+	time_t mtime = ((struct timespec)fs.st_mtim).tv_sec;
+
+	if(ld->atime < mtime) {
+	    list_move(&s3Cache->fileList, &ld->watch_d, p, &mtime, NULL);
+	    log_message(LOG_DEBUG, "s3_cache_update_file_size: file(%s) access time(%d) updated.", ld->path, ld->atime);
 	}
 
 	return 0;
@@ -318,6 +326,7 @@ int s3_cache_update_file_atime(S3Cache *s3Cache, struct list_data *ld) {
 	}
 
 	time_t atime = ((struct timespec)fs.st_atim).tv_sec;
+
 	if(ld->atime < atime) {
 	    list_move(&s3Cache->fileList, &ld->watch_d, p, &atime, NULL);
 	    log_message(LOG_DEBUG, "s3_cache_update_file_atime: file(%s) access time(%d) updated.", ld->path, ld->atime);
@@ -951,93 +960,6 @@ static int store_s3_tile_read(struct storage_backend *store, const char *xmlconf
 
 /*****************************************************************************/
 
-#if defined APACHE
-
-static short store_s3_socket_closed(int socket) {
-
-	struct pollfd fds;
-
-	fds.fd = socket;
-	fds.events = POLLRDHUP;
-	int r = poll(&fds, 1, 0);
-
-
-	if(fds.revents & POLLRDHUP) {
-		log_message(STORE_LOGLVL_DEBUG, "store_s3_socket_closed: peer closed connection, POLLRDUP(%x)", r);
-		return 1;
-
-	} else if(r == -1) {
-		log_message(STORE_LOGLVL_ERR, "store_s3_socket_closed: poll(%d) error, %s", socket, strerror(errno));
-
-	} else {
-		log_message(STORE_LOGLVL_DEBUG, "store_s3_socket_closed: opened, poll() returns (%d)", r);
-	}
-
-	return 0;
-}
-
-#endif
-
-/*****************************************************************************/
-
-#if defined APACHE || defined RENDERD
-
-static void store_s3_pipe_path(char *pipePath, size_t len, char* path) {
-
-	  const char* c = path;
-	  long sum = 0;
-
-	  while(*c) {
-	    sum += *c++;
-	  }
-
-	  snprintf(pipePath, len, "%s/%ld", PIPE_DIR, sum);
-}
-
-/*****************************************************************************/
-
-static void store_s3_pipe_remove(char* path) {
-
-	if(unlink(path) == -1) {
-		log_message(STORE_LOGLVL_ERR, "store_s3_pipe_remove: unlink(%s) failed, %s", path, strerror(errno));
-	} else {
-		log_message(STORE_LOGLVL_DEBUG, "store_s3_pipe_remove: unlink(%s) successful", path);
-	}
-}
-
-/*****************************************************************************/
-
-static void store_s3_pipe_hup(char* path) {
-
-	int fd = open(path, O_WRONLY |  O_NONBLOCK);
-	if(fd == -1) {
-		log_message(STORE_LOGLVL_ERR, "store_s3_pipe_hup: open(%s) failed, %s", path, strerror(errno));
-	} else {
-		close(fd);
-		log_message(STORE_LOGLVL_DEBUG, "store_s3_pipe_hup: event close(%s) successful", path);
-	}
-}
-
-/*****************************************************************************/
-
-static void store_s3_tile_cancel(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z) {
-
-    char cachePath[PATH_MAX];
-    char pipePath[PATH_MAX];
-    struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
-    xyzo_to_meta(cachePath, PATH_MAX, ctx->s3Cache.path, xmlconfig, options, x, y, z);
-    store_s3_pipe_path(pipePath, PATH_MAX, cachePath);
-
-    log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_cancel: cancel for %s", pipePath);
-
-    store_s3_pipe_hup(pipePath);
-    store_s3_pipe_remove(pipePath);
-}
-
-/*****************************************************************************/
-
-#endif
-
 static void store_s3_tile_stat_with_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, struct stat_info *tile_stat) {
 
     char cachePath[PATH_MAX];
@@ -1050,112 +972,58 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
 
     xyzo_to_meta(cachePath, PATH_MAX, ctx->s3Cache.path, xmlconfig, options, x, y, z);
 
-
-    fd = open(cachePath, O_RDONLY);
-    if(fd != -1) {
-
-    	if(flock(fd, LOCK_SH) != -1) {
-
-        	if(fstat(fd, &st_stat) != -1) {
-
-        		tile_stat->size = st_stat.st_size;
-        		tile_stat->mtime = st_stat.st_mtime;
-        		tile_stat->atime = st_stat.st_atime;
-        		tile_stat->ctime = st_stat.st_ctime;
-        		tile_stat->origin = cache;
-
-        		log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #1 successfully read properties of metatile from cache %s", cachePath);
-
-        		close(fd);
-        		return;
-
-            } else {
-            	log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: fstat(%s) error, %s", cachePath, strerror(errno));
-            	close(fd);
-            }
-
-    	} else {
-    		log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: flock(%s) error, %s", cachePath, strerror(errno));
-    		close(fd);
-    	}
-
-    } else if(errno != ENOENT) {
-    	log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: open(%s) error, %s", cachePath, strerror(errno));
+    if (mkdirp(cachePath)) {
+    	log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: error creating S3 cache directory structure for meta tile: %s", cachePath);
+        return;
     }
 
-    #ifdef APACHE
+    fd = open(cachePath, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR |  S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+    if(fd != -1) {
 
-    	if(store_s3_socket_closed(store->socket)) {
-    		tile_stat->aborted = 1;
+    	if(flock(fd, LOCK_EX) == -1) {
+    		log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: flock(%s, LOCK_EX) error, %s", cachePath, strerror(errno));
+    		close(fd);
     		return;
     	}
 
-        store_s3_pipe_path(pipePath, PATH_MAX, cachePath);
-		if(mkfifo(pipePath, S_IRUSR |  S_IWUSR | S_IRGRP | S_IWGRP) != 0 ) {
+    } else if(errno == EEXIST) {
 
-			if(errno == EEXIST) {
+    	fd = open(cachePath, O_RDONLY);
+    	if(fd == -1) {
+    		log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: open(%s, O_RDONLY) error, %s", cachePath, strerror(errno));
+    		return;
+    	}
 
-				int fd = open(pipePath, O_RDONLY |  O_NONBLOCK);
+    	if(flock(fd, LOCK_SH) == -1) {
+    		log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: flock(%s, LOCK_SH) error, %s", cachePath, strerror(errno));
+    		close(fd);
+    		return;
+    	}
 
-				struct pollfd fds[2];
+    	if(fstat(fd, &st_stat) == -1) {
+    		log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: fstat(%s) error, %s", cachePath, strerror(errno));
+    		close(fd);
+    		return;
+    	}
 
-				fds[0].fd =  fd;
+    	if(st_stat.st_size > 0) {
 
-				fds[1].fd = store->socket;
-				fds[1].events = POLLRDHUP;
+    		tile_stat->size = st_stat.st_size;
+    		tile_stat->mtime = st_stat.st_mtime;
+       		tile_stat->atime = st_stat.st_atime;
+       		tile_stat->ctime = st_stat.st_ctime;
+    	    tile_stat->origin = cache;
 
-				log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: waiting for poll(%s) event ...", pipePath);
-				int r = poll(fds, 2, store->timeout);
+    	    log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: successfully read properties of metatile from cache %s", cachePath);
+    	}
 
-				if(r == -1) {
-					log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: poll(%s) error, %s", pipePath, strerror(errno));
-					close(fd);
+    	close(fd);
+    	return;
 
-				} else if(r == 0) {
-
-					log_message(STORE_LOGLVL_WARNING, "store_s3_tile_stat: poll(%s) timeout", pipePath);
-					close(fd);
-					tile_stat->aborted = 1;
-
-					return;
-
-				} else {
-
-					log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: poll(%s) events %x", pipePath, fds[r].revents);
-
-					if(fds[0].revents & POLLHUP) {
-
-						log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: poll(%s) event  POLLHUP(%x)", pipePath, fds[0].revents);
-						close(fd);
-
-						if(! stat(cachePath, &st_stat)) {
-							tile_stat->size = st_stat.st_size;
-							tile_stat->mtime = st_stat.st_mtime;
-							tile_stat->atime = st_stat.st_atime;
-							tile_stat->ctime = st_stat.st_ctime;
-							tile_stat->origin = cache;
-							log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: #2 successfully read properties of metatile from cache %s", cachePath);
-							return;
-						}
-
-					} else if(fds[1].revents & POLLRDHUP) {
-
-						log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: poll(%s) event  POLLRDHUP(%x)", pipePath, fds[1].revents);
-						tile_stat->aborted = 1;
-						close(fd);
-						return;
-					}
-				}
-
-			} else {
-				log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: mkfifo(%s) failed, %s", pipePath, strerror(errno));
-			}
-
-		} else {
-			log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: mkfifo(%s) successful", pipePath);
-		}
-
-    #endif
+    } else {
+    	log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: open(%s, O_CREAT | O_EXCL | O_WRONLY, S_IRUSR |  S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH) error, %s", cachePath, strerror(errno));
+    	return;
+    }
 
 
     /* get metatile file from S3 */
@@ -1165,11 +1033,11 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
     struct s3_tile_request request = store_s3_get_tile_from_s3(ctx->ctx, s3Path, "store_s3_tile_stat");
     if(request.tile == NULL) {
         /* metatile doesn't exists on S3, need to render it */
+    	close(fd);
         return;
     }
 
     /* get metatile file stat from S3 */
-
     tile_stat->size = request.tile_size;
     tile_stat->expired = request.tile_expired;
     tile_stat->mtime = request.tile_mod_time;
@@ -1177,21 +1045,19 @@ static void store_s3_tile_stat_with_cache(struct storage_backend *store, const c
 
     /* save metatile file to cache */
 
-    store_s3_save_tile_to_cache(request.tile, request.tile_size, cachePath, "store_s3_tile_stat");
+    int res = write(fd, request.tile, request.tile_size);
+    if (res != request.tile_size) {
+    	log_message(STORE_LOGLVL_ERR, "store_s3_tile_stat: error writing metatile %s to S3 cache: %s", cachePath, strerror(errno));
+        close(fd);
+        return;
+    }
+    log_message(STORE_LOGLVL_DEBUG, "store_s3_tile_stat: save metatile %s to S3 cache", cachePath);
+    close(fd);
 
     /* TODO: set metatile stat in cache according to S3 if needed */
 
     free(request.tile);
 
-
-    #ifdef APACHE
-
-    /* inform other apache processes that metatile is in cache now */
-
-    store_s3_pipe_hup(pipePath);
-    store_s3_pipe_remove(pipePath);
-
-    #endif
 }
 
 /*****************************************************************************/
@@ -1253,7 +1119,6 @@ static struct stat_info store_s3_tile_stat(struct storage_backend *store, const 
     tile_stat.atime = 0;
     tile_stat.ctime = 0;
     tile_stat.origin = unknow;
-    tile_stat.aborted = 0;
 
     const char* cachePath = ((struct store_s3_ctx*)store->storage_ctx)->s3Cache.path;
 
@@ -1288,17 +1153,6 @@ static int store_s3_metatile_write_with_cache(struct storage_backend *store, con
     xyzo_to_meta(cachePath, PATH_MAX, ctx->s3Cache.path, xmlconfig, options, x, y, z);
 
     store_s3_save_tile_to_cache(buf, sz, cachePath, "store_s3_metatile_write");
-
-    /* inform apache processes that metatile is in S3 cache now */
-
-    #ifdef RENDERD
-
-    	char pipePath[PATH_MAX];
-    	store_s3_pipe_path(pipePath, PATH_MAX, cachePath);
-    	store_s3_pipe_hup(pipePath);
-    	store_s3_pipe_remove(pipePath);
-
-    #endif
 
     /* save metatile file to S3 */
 
@@ -1800,9 +1654,6 @@ struct storage_backend* init_storage_s3(const char *connection_string)
     store->metatile_expire = &store_s3_metatile_expire;
     store->tile_storage_id = &store_s3_tile_storage_id;
     store->close_storage = &store_s3_close_storage;
-	#if defined APACHE || defined RENDERD
-    	store->tile_cancel = &store_s3_tile_cancel;
-    #endif
 
     return store;
 #endif
