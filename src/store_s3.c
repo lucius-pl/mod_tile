@@ -963,7 +963,6 @@ static int store_s3_tile_read(struct storage_backend *store, const char *xmlconf
 static void store_s3_tile_stat_with_cache(struct storage_backend *store, const char *xmlconfig, const char *options, int x, int y, int z, struct stat_info *tile_stat) {
 
     char cachePath[PATH_MAX];
-    char pipePath[PATH_MAX];
     struct store_s3_ctx *ctx = (struct store_s3_ctx*) store->storage_ctx;
     struct stat st_stat;
     int fd;

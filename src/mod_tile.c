@@ -218,9 +218,6 @@ static int request_tile(request_rec *r, struct protocol *cmd, int renderImmediat
     ap_conf_vector_t *sconf = r->server->module_config;
     tile_server_conf *scfg = ap_get_module_config(sconf, &tile_module);
     apr_os_sock_t *rs = (apr_os_sock_t*)ap_get_module_config(r->connection->conn_config, &tile_module);
-    struct tile_request_data * rdata = (struct tile_request_data *)ap_get_module_config(r->request_config, &tile_module);
-
-
 
     fd = socket_init(r);
 
